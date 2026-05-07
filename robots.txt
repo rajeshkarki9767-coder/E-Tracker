@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://e-tracker-expense.vercel.app/sitemap.xml
