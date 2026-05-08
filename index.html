@@ -1678,6 +1678,7 @@ cfg.dateSystem = 'en'; /* always use AD */
 if (!cfg.theme) cfg.theme = 'system';
 // Check recurring expenses on app load
 setTimeout(() => { if(typeof checkRecurringExpenses === 'function') checkRecurringExpenses(); }, 500);
+setTimeout(() => { if(typeof updateVendorSuggestions === 'function') updateVendorSuggestions(); }, 600);
 // Backup reminder (every 7 days)
 setTimeout(() => {
   if(exps.length < 5) return;
@@ -2666,14 +2667,34 @@ function _drawSummary() {
         responsive: true,
         maintainAspectRatio: false,
         layout: { padding: { top: 40, bottom: 40, left: 60, right: 60 } },
+        /* Tap a slice -> open category drill-down (handles short labels too) */
+        onClick: (evt, elements) => {
+          if (!elements || elements.length === 0) return;
+          const idx = elements[0].index;
+          const fullCategoryName = pieData[idx][0];
+          if (typeof showCategoryDrilldown === 'function') {
+            showCategoryDrilldown(fullCategoryName, pool);
+          }
+        },
+        onHover: (evt, elements) => {
+          /* Cursor pointer on hover */
+          evt.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+        },
         plugins: {
           legend: { display: false },
           tooltip: {
+            backgroundColor: 'rgba(28,28,34,0.95)',
+            titleFont: { size: 12, weight: '600' },
+            bodyFont: { size: 13, weight: '500' },
+            padding: 10,
+            cornerRadius: 8,
+            displayColors: true,
             callbacks: {
+              title: (ctx) => ctx[0].label,  /* Shows FULL category name */
               label: (ctx) => {
                 const v = ctx.parsed;
                 const pct = ((v / totalSum) * 100).toFixed(1);
-                return ctx.label + ': ' + fmt(v) + ' (' + pct + '%)';
+                return fmt(v) + ' (' + pct + '%) — tap to view details';
               }
             }
           },
@@ -2762,13 +2783,24 @@ function _drawSummary() {
     } else if (thisM > 0 && prevM === 0) {
       momBadge = `<span style="font-size:10px;font-weight:600;color:var(--acc);flex-shrink:0;min-width:32px;text-align:right">New</span>`;
     }
-    return `<div class="cat-row">
+    return `<div class="cat-row" data-cat="${escHtml(c)}" data-pool-source="summary" style="cursor:pointer">
       <span class="cat-nm">${escHtml(c)}</span>
       <div class="cat-bar-bg"><div class="cat-bar" style="width:${(v/maxC*100).toFixed(0)}%;background:${col}"></div></div>
       ${spark}${momBadge}
       <span class="cat-amt">${fmt(Math.round(v))}</span>
     </div>`;
   }).join('') || '<div style="color:var(--text3);font-size:12px;padding:4px 0">No data in selected range</div>';
+  
+  /* Wire tap on each cat-row → open drill-down */
+  document.querySelectorAll('#cat-bars .cat-row').forEach(row => {
+    row.onclick = () => {
+      haptic(6);
+      const catName = row.dataset.cat;
+      if (catName && typeof showCategoryDrilldown === 'function') {
+        showCategoryDrilldown(catName, pool);
+      }
+    };
+  });
 
   const vndTitle = document.getElementById('sum-vnd-title');
   if (vndTitle) vndTitle.textContent = `By vendor — ${rangeLabel.toLowerCase()}`;
@@ -3046,6 +3078,144 @@ function renderTagTotals(pool) {
 }
 
 /* Sheet showing all expenses + breakdown for one tag */
+/* Category drill-down sheet — shows sub-cat breakdown, all expenses in category */
+function showCategoryDrilldown(categoryName, pool) {
+  const existing = document.getElementById('cat-drilldown-sheet');
+  if (existing) existing.remove();
+  
+  /* Filter pool to this category */
+  const items = (pool || exps).filter(e => (e.category || 'Other') === categoryName);
+  if (items.length === 0) {
+    showToast('No expenses in ' + categoryName);
+    return;
+  }
+  
+  const total = items.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+  const count = items.length;
+  const avg = count > 0 ? total / count : 0;
+  
+  /* Group by sub-category (or "(no sub-category)" bucket) */
+  const subMap = {};
+  items.forEach(e => {
+    const sub = (e.subcategory || '').trim() || '(no sub-category)';
+    if (!subMap[sub]) subMap[sub] = { total: 0, count: 0, expenses: [] };
+    subMap[sub].total += parseFloat(e.amount || 0);
+    subMap[sub].count += 1;
+    subMap[sub].expenses.push(e);
+  });
+  const sortedSubs = Object.entries(subMap).sort((a, b) => b[1].total - a[1].total);
+  
+  /* Recent expenses sorted by date desc */
+  const recent = items.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  
+  /* Date range for header */
+  const allDates = items.map(e => e.date).filter(Boolean).sort();
+  const firstDate = allDates[0];
+  const lastDate = allDates[allDates.length - 1];
+  const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  
+  /* Cat icon + color */
+  const icon = (cfg.catIcons && cfg.catIcons[categoryName]) || (typeof CAT_ICONS !== 'undefined' && CAT_ICONS[categoryName]) || '📦';
+  const ciRaw = cfg.cats.indexOf(categoryName);
+  const ci = (ciRaw >= 0 ? ciRaw : 0) % CAT_COLORS.length;
+  const catColor = CAT_COLORS[ci];
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'cat-drilldown-sheet';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  
+  let html = '<div style="background:var(--surf);border-radius:18px 18px 0 0;width:100%;max-width:440px;max-height:88vh;overflow-y:auto;animation:slideUp .25s ease-out">';
+  html += '<style>@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}</style>';
+  
+  /* Header */
+  html += '<div style="padding:18px 20px 14px;border-bottom:0.5px solid var(--brd);position:sticky;top:0;background:var(--surf);z-index:1;display:flex;align-items:center;justify-content:space-between">' +
+    '<div style="flex:1;min-width:0;display:flex;align-items:center;gap:10px">' +
+      '<div style="width:36px;height:36px;border-radius:9px;background:' + catColor + '22;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px">' + icon + '</div>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:17px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(categoryName) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + fmtDate(firstDate) + (firstDate !== lastDate ? ' → ' + fmtDate(lastDate) : '') + '</div>' +
+      '</div>' +
+    '</div>' +
+    '<button id="cd-close-btn" style="background:var(--surf2);border:0;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;color:var(--text2);flex-shrink:0">×</button>' +
+  '</div>';
+  
+  /* Stats */
+  html += '<div style="padding:14px 20px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">' +
+    '<div style="background:' + catColor + '15;border-radius:10px;padding:12px;text-align:center">' +
+      '<div style="font-size:9px;color:' + catColor + ';text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:4px">Total</div>' +
+      '<div style="font-size:15px;font-weight:700;color:' + catColor + ';font-family:var(--mono)">' + fmt(Math.round(total)) + '</div>' +
+    '</div>' +
+    '<div style="background:var(--surf2);border-radius:10px;padding:12px;text-align:center">' +
+      '<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:4px">Count</div>' +
+      '<div style="font-size:15px;font-weight:700;color:var(--text)">' + count + '</div>' +
+    '</div>' +
+    '<div style="background:var(--surf2);border-radius:10px;padding:12px;text-align:center">' +
+      '<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:4px">Avg</div>' +
+      '<div style="font-size:15px;font-weight:700;color:var(--text);font-family:var(--mono)">' + fmt(Math.round(avg)) + '</div>' +
+    '</div>' +
+  '</div>';
+  
+  /* Sub-category breakdown — only show if there are real sub-categories OR multiple buckets */
+  const hasRealSubs = sortedSubs.some(([n]) => n !== '(no sub-category)');
+  if (hasRealSubs && sortedSubs.length > 0) {
+    html += '<div style="padding:8px 20px 14px">' +
+      '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;margin-bottom:10px">By Sub-category</div>';
+    sortedSubs.forEach(([subName, info]) => {
+      const subIcon = (cfg.subcatIcons && cfg.subcatIcons[categoryName] && cfg.subcatIcons[categoryName][subName]) || '•';
+      const pct = total > 0 ? ((info.total / total) * 100).toFixed(0) : 0;
+      html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--brd)">' +
+        '<span style="width:24px;text-align:center;flex-shrink:0;font-size:14px">' + subIcon + '</span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text);margin-bottom:3px">' +
+            '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(subName) + '</span>' +
+            '<span style="font-weight:600;font-family:var(--mono)">' + fmt(Math.round(info.total)) + '</span>' +
+          '</div>' +
+          '<div style="height:4px;background:var(--surf2);border-radius:2px;overflow:hidden">' +
+            '<div style="height:100%;background:' + catColor + ';width:' + pct + '%;transition:width .3s"></div>' +
+          '</div>' +
+          '<div style="font-size:10px;color:var(--text3);margin-top:3px">' + info.count + ' expense' + (info.count === 1 ? '' : 's') + '</div>' +
+        '</div>' +
+        '<span style="font-size:11px;color:var(--text3);font-family:var(--mono);min-width:32px;text-align:right">' + pct + '%</span>' +
+      '</div>';
+    });
+    html += '</div>';
+  } else {
+    /* No sub-categories — show a hint */
+    html += '<div style="padding:8px 20px 0">' +
+      '<div style="background:var(--surf2);border-radius:10px;padding:11px 14px;font-size:11px;color:var(--text3);line-height:1.5">' +
+        '💡 Add sub-categories to ' + escHtml(categoryName) + ' (in Account → Categories) for more detailed breakdown.' +
+      '</div>' +
+    '</div>';
+  }
+  
+  /* All expenses */
+  html += '<div style="padding:14px 20px 24px">' +
+    '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;margin-bottom:10px">All Expenses (' + recent.length + ')</div>';
+  recent.slice(0, 50).forEach(e => {
+    const subText = e.subcategory ? ' · ' + escHtml(e.subcategory) : '';
+    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--brd)">' +
+      '<span style="font-size:18px">' + icon + '</span>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(e.name || categoryName) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3)">' + fmtDate(e.date) + subText + '</div>' +
+      '</div>' +
+      '<span style="font-size:13px;font-weight:600;font-family:var(--mono);color:var(--text)">' + fmt(e.amount) + '</span>' +
+    '</div>';
+  });
+  if (recent.length > 50) {
+    html += '<div style="text-align:center;font-size:11px;color:var(--text3);padding:10px 0">+ ' + (recent.length - 50) + ' more</div>';
+  }
+  html += '</div>';
+  
+  html += '</div>';
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+  
+  const close = () => { overlay.style.opacity = '0'; overlay.style.transition = 'opacity .15s'; setTimeout(() => overlay.remove(), 150); };
+  document.getElementById('cd-close-btn').onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+}
+
 function showTagBreakdown(tagKey, info) {
   if (!info) return;
   const existing = document.getElementById('tag-breakdown-sheet');
@@ -5481,6 +5651,7 @@ function resetDelBtn() {
 
 function openAdd() {
   editId = null; selPmt = ''; splitPmts = []; curTags = []; splitItems = [];
+  updateVendorSuggestions();  /* refresh datalist before showing form */
   document.getElementById('sheet-title').textContent = 'New expense';
   document.getElementById('f-date').value  = today();
   document.getElementById('f-amt').value   = '';
@@ -5509,6 +5680,7 @@ function openEdit(id) {
   const e = exps.find(x => x.id === id);
   if (!e) return;
   editId = id; selPmt = e.payment || cfg.pmts[0]; splitPmts = []; curTags = [...(e.tags||[])];
+  updateVendorSuggestions();  /* refresh datalist before showing form */
   document.getElementById('sheet-title').textContent = 'Edit expense';
   document.getElementById('f-date').value   = e.date;
   document.getElementById('f-amt').value    = e.amount;
@@ -5761,6 +5933,7 @@ document.getElementById('save-btn').addEventListener('click', () => {
   }
   _prevExpCount = newCount;
   persist(); renderAll();
+  updateVendorSuggestions();
   /* Budget alert check */
   if (cfg.budget > 0 && cfg.budgetAlerts !== false) {
     const now = new Date();
@@ -7416,13 +7589,24 @@ function renderCategoryGrowth(pool) {
     const mini = d.vals.map((v,i) =>
       `<div title="${mLabels[i]}: ${fmt(Math.round(v))}" style="flex:1;background:${i===2?'var(--acc)':'var(--acc-l)'};border-radius:3px;height:${Math.max(4,Math.round(v/maxV*28))}px;align-self:flex-end"></div>`
     ).join('');
-    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--brd)">
+    return `<div class="cat-growth-row" data-cat="${escHtml(d.cat)}" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--brd);cursor:pointer">
       <div style="font-size:14px;flex-shrink:0">${d.icon}</div>
       <span style="font-size:12px;font-weight:500;color:var(--text);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(d.cat)}</span>
       <div style="display:flex;gap:2px;align-items:flex-end;height:28px;width:42px;flex-shrink:0">${mini}</div>
       ${badge}
     </div>`;
   }).join('') + `<div style="font-size:10px;color:var(--text3);margin-top:6px;text-align:right">${mLabels[0]} → ${mLabels[2]} (3-month change)</div>`;
+  
+  /* Wire taps on each row → drill-down (uses same trends pool) */
+  el.querySelectorAll('.cat-growth-row').forEach(row => {
+    row.onclick = () => {
+      haptic(6);
+      const catName = row.dataset.cat;
+      if (catName && typeof showCategoryDrilldown === 'function') {
+        showCategoryDrilldown(catName, pool);
+      }
+    };
+  });
 }
 
 
