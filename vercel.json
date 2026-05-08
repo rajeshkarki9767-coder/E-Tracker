@@ -6,6 +6,10 @@
       "dest": "/api/chat.js"
     },
     {
+      "src": "/api/fx-rate",
+      "dest": "/api/fx-rate.js"
+    },
+    {
       "src": "/",
       "dest": "/index.html"
     },
