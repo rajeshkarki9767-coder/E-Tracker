@@ -1936,7 +1936,12 @@ function today() {
   return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0') + '-' + String(n.getDate()).padStart(2,'0');
 }
 function mkKey(d)  { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0'); }
-function mkLabel(k){ const [y,m] = k.split('-'); return new Date(y, m-1, 1).toLocaleDateString('en-US', {month:'short', year:'2-digit'}); }
+function mkLabel(k){
+  const [y,m] = k.split('-');
+  const monthShort = new Date(y, m-1, 1).toLocaleDateString('en-US', {month:'short'});
+  const yearShort = String(y).slice(-2);
+  return monthShort + " '" + yearShort;
+}
 function formatExpDate(adStr) {
   const now = new Date();
   const pad = n => String(n).padStart(2,'0');
