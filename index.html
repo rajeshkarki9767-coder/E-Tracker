@@ -1938,9 +1938,11 @@ function today() {
 function mkKey(d)  { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0'); }
 function mkLabel(k){
   const [y,m] = k.split('-');
-  const monthShort = new Date(y, m-1, 1).toLocaleDateString('en-US', {month:'short'});
-  const yearShort = String(y).slice(-2);
-  return monthShort + " '" + yearShort;
+  return new Date(y, m-1, 1).toLocaleDateString('en-US', {month:'short'});
+}
+function mkLabelFull(k){
+  const [y,m] = k.split('-');
+  return new Date(y, m-1, 1).toLocaleDateString('en-US', {month:'short', year:'numeric'});
 }
 function formatExpDate(adStr) {
   const now = new Date();
@@ -2990,6 +2992,11 @@ function _drawTrends() {
             cornerRadius: 8,
             displayColors: false,
             callbacks: {
+              title: (ctx) => {
+                const idx = ctx[0].dataIndex;
+                if (typeof months !== 'undefined' && months[idx]) return mkLabelFull(months[idx]);
+                return ctx[0].label;
+              },
               label: (ctx) => cfg.sym + ' ' + Math.round(ctx.parsed.y).toLocaleString('en-IN')
             }
           }
@@ -7966,8 +7973,8 @@ function renderBestWorstMonth(pool, months, data) {
       <div style="font-size:11px;color:var(--text2);margin-top:2px">${lbl}</div>
     </div>`;
   el.innerHTML =
-    card('🟢 Lowest spend', months[minIdx]?keyToLabel(months[minIdx]):'—', data[minIdx]||0, 'var(--grn)', 'var(--grn-l)') +
-    card('🔴 Highest spend', months[maxIdx]?keyToLabel(months[maxIdx]):'—', data[maxIdx]||0, 'var(--red)', 'var(--red-l)');
+    card('🟢 Lowest spend', months[minIdx]?mkLabelFull(months[minIdx]):'—', data[minIdx]||0, 'var(--grn)', 'var(--grn-l)') +
+    card('🔴 Highest spend', months[maxIdx]?mkLabelFull(months[maxIdx]):'—', data[maxIdx]||0, 'var(--red)', 'var(--red-l)');
 }
 
 /* ─── CUMULATIVE SPEND LINE ─── */
@@ -8084,7 +8091,14 @@ function renderCumulativeChart(pool) {
           padding: 10,
           cornerRadius: 8,
           callbacks: {
-            title: (ctx) => 'Day ' + ctx[0].label,
+            title: (ctx) => {
+              /* Build full date: this month's day + current month + year */
+              const dayNum = parseInt(ctx[0].label);
+              if (isNaN(dayNum)) return ctx[0].label;
+              const now = new Date();
+              const d = new Date(now.getFullYear(), now.getMonth(), dayNum);
+              return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            },
             label: (ctx) => ctx.dataset.label + ': ' + cfg.sym + ' ' + Math.round(ctx.parsed.y).toLocaleString('en-IN')
           }
         }
@@ -8130,16 +8144,24 @@ function renderDomPattern(pool) {
   const dc = document.getElementById('domChart');
   if (!dc) return;
   if (!pool.length) { if(chartInst.dom){chartInst.dom.destroy();chartInst.dom=null;} return; }
-  // Average spend per day-of-month across all months in pool
+  // TOTAL spend per day-of-month across all months in pool
   const dayTotals = Array(31).fill(0), dayCounts = Array(31).fill(0);
   pool.forEach(e => {
     const day = parseInt(e.date.slice(8,10)) - 1;
     dayTotals[day] += parseFloat(e.amount);
     dayCounts[day]++;
   });
-  const avgs = dayTotals.map((t,i)=>dayCounts[i]>0?parseFloat((t/dayCounts[i]).toFixed(2)):0).map(v=>isNaN(v)?0:v);
+  /* Use totals, not averages */
+  const avgs = dayTotals.map(v => isNaN(v) ? 0 : v);
   const lbls = Array.from({length:31},(_,i)=>i+1);
   const maxA = Math.max(...avgs, 1);
+  
+  /* Pre-compute dates for each day-of-month for tooltip */
+  const dayDates = Array.from({length:31}, () => []);
+  pool.forEach(e => {
+    const day = parseInt(e.date.slice(8,10)) - 1;
+    if (day >= 0 && day < 31) dayDates[day].push(e.date);
+  });
 
   if (chartInst.dom) { chartInst.dom.destroy(); chartInst.dom=null; }
   /* Make inner container wider — 31 days needs space */
@@ -8187,8 +8209,26 @@ function renderDomPattern(pool) {
           cornerRadius: 8,
           displayColors: false,
           callbacks: { 
-            title: (ctx) => 'Day ' + ctx[0].label + ' avg',
-            label: ctx => cfg.sym + ' ' + Math.round(ctx.raw).toLocaleString('en-IN')
+            title: (ctx) => {
+              const idx = ctx[0].dataIndex;
+              const dates = dayDates[idx] || [];
+              if (dates.length === 0) return 'Day ' + (idx + 1);
+              const uniq = [...new Set(dates)].sort();
+              if (uniq.length === 1) {
+                return new Date(uniq[0] + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+              }
+              const first = new Date(uniq[0] + 'T00:00:00');
+              const last = new Date(uniq[uniq.length - 1] + 'T00:00:00');
+              const fmtMY = d => d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+              return 'Day ' + (idx + 1) + ' · ' + fmtMY(first) + ' → ' + fmtMY(last);
+            },
+            label: ctx => {
+              const idx = ctx.dataIndex;
+              const dates = dayDates[idx] || [];
+              const total = ctx.raw;
+              const occurrences = new Set(dates).size;
+              return 'Total: ' + cfg.sym + ' ' + Math.round(total).toLocaleString('en-IN') + (occurrences > 1 ? ' (' + occurrences + ' days)' : '');
+            }
           }
         }
       },
@@ -8199,8 +8239,18 @@ function renderDomPattern(pool) {
             color: tcDom.text2, 
             callback: (v, i) => {
               const dayNum = i + 1;
-              const isLast = i === lbls.length - 1;
-              if (dayNum === 1 || isLast || dayNum % 5 === 0) return dayNum;
+              /* Find highest day-of-month with actual data */
+              let highestDay = 0;
+              for (let j = avgs.length - 1; j >= 0; j--) {
+                if (avgs[j] > 0) { highestDay = j + 1; break; }
+              }
+              if (highestDay === 0) highestDay = 31;
+              
+              /* Always show 1 and the highest-data day. Show every-5th unless it would crowd the highest day. */
+              if (dayNum === 1) return dayNum;
+              if (dayNum === highestDay) return dayNum;
+              /* Skip every-5th day if it's within 2 days of the highest day (avoids 30+31 crammed) */
+              if (dayNum % 5 === 0 && Math.abs(dayNum - highestDay) > 2) return dayNum;
               return '';
             },
             maxRotation: 0
