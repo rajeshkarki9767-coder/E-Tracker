@@ -621,7 +621,13 @@ html.theme-light{
     <!-- Weekend vs weekday stat row -->
     <div id="wknd-row" style="margin-bottom:10px"></div>
     <div class="chart-card" id="heatmap-card">
-      <div class="chart-card-title" id="sum-dow-title">Spending by day of week</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;gap:10px">
+        <div class="chart-card-title" id="sum-dow-title" style="margin-bottom:0">Spending by day of week</div>
+        <button id="full-calendar-btn" style="background:var(--surf2);border:0.5px solid var(--brd2);border-radius:6px;padding:5px 9px;font-size:11px;font-weight:600;color:var(--text2);cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:5px;flex-shrink:0">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span>Calendar</span>
+        </button>
+      </div>
       <div id="dow-heatmap"></div>
     </div>
     <div class="chart-card">
@@ -873,14 +879,7 @@ html.theme-light{
           <option value="YMD">YYYY-MM-DD</option>
         </select>
       </div>
-      <div class="set-row">
-        <span class="set-lbl">Week starts on</span>
-        <select id="set-week-start" style="background:var(--surf2);border:0.5px solid var(--brd2);border-radius:6px;padding:6px 9px;font-size:13px;color:var(--text);font-family:var(--font);outline:none;cursor:pointer">
-          <option value="mon">Monday</option>
-          <option value="sun">Sunday</option>
-        </select>
-      </div>
-      <div class="set-row">
+<div class="set-row">
         <span class="set-lbl">Number format</span>
         <select id="set-num-format" style="background:var(--surf2);border:0.5px solid var(--brd2);border-radius:6px;padding:6px 9px;font-size:13px;color:var(--text);font-family:var(--font);outline:none;cursor:pointer">
           <option value="intl">1,234,567</option>
@@ -1153,6 +1152,13 @@ html.theme-light{
       <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.4">Tap to mark a day as weekend. Affects "Weekend vs Weekday" stats.</div>
       <div id="weekend-day-picker" style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px"></div>
       <div style="font-size:11px;color:var(--text3);margin-top:10px;text-align:center" id="weekend-summary"></div>
+    </div>
+
+    <div class="sec-lbl">Week Starts On</div>
+    <div class="set-sec" style="padding:14px">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.4">Choose which day starts your week. Affects calendar views and weekly summaries.</div>
+      <div id="week-start-picker" style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px"></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:10px;text-align:center" id="week-start-summary"></div>
     </div>
   </div>
 
@@ -2171,10 +2177,28 @@ function escHtml(s) {
 function setupSwipe() {
   document.querySelectorAll('.exp-item').forEach(item => {
     const reveal = item.querySelector('.swipe-del-reveal');
-    let sx = 0, dx = 0, active = false, confirmed = false;
+    let sx = 0, dx = 0, active = false, revealed = false;
+
+    /* Prevent the click handler from firing right after a swipe */
+    let blockClickUntil = 0;
+
+    item.addEventListener('click', (ev) => {
+      /* If revealed OR within 250ms of a swipe end, intercept the click */
+      if (revealed || Date.now() < blockClickUntil) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        /* If revealed, tapping the row (not the X area) should hide it */
+        if (revealed && !ev.target.closest('.swipe-del-reveal')) {
+          item.style.transform = '';
+          reveal.style.opacity = '0';
+          reveal.style.pointerEvents = 'none';
+          revealed = false;
+        }
+      }
+    }, true);  /* capture phase so we run before the openEdit click handler */
 
     item.addEventListener('touchstart', e => {
-      sx = e.touches[0].clientX; dx = 0; active = true; confirmed = false;
+      sx = e.touches[0].clientX; dx = 0; active = true;
     }, {passive: true});
 
     item.addEventListener('touchmove', e => {
@@ -2189,23 +2213,59 @@ function setupSwipe() {
 
     item.addEventListener('touchend', () => {
       active = false;
-      if (dx < -60 && !confirmed) {
-        confirmed = true;
+      if (dx < -60) {
+        /* Reveal the delete button — don't auto-delete */
+        revealed = true;
         item.style.transform = 'translateX(-72px)';
         reveal.style.opacity = '1';
         reveal.style.pointerEvents = 'auto';
-        reveal.onclick = (ev) => {
+        blockClickUntil = Date.now() + 350;  /* swallow the imminent synthetic click */
+        
+        reveal.onclick = async (ev) => {
           ev.stopPropagation();
+          ev.preventDefault();
           const id = item.dataset.id;
+          const exp = exps.find(e => e.id === id);
+          if (!exp) return;
+          
+          /* Confirmation dialog */
+          const ok = await showConfirm({
+            title: 'Delete this expense?',
+            message: '"' + escHtml(exp.name || exp.category || 'Expense') + '" — ' + fmt(exp.amount) + '. This cannot be undone.',
+            confirmText: 'Delete',
+            danger: true,
+            icon: '🗑️'
+          });
+          if (!ok) {
+            /* User cancelled — close the swipe */
+            item.style.transform = '';
+            reveal.style.opacity = '0';
+            reveal.style.pointerEvents = 'none';
+            revealed = false;
+            return;
+          }
           exps = exps.filter(e => e.id !== id);
           persist();
           renderExps();
+          showToast('Deleted');
         };
-      } else {
+      } else if (dx < -8 || dx > 8) {
+        /* Slight swipe but not enough — reset, also block click briefly */
+        blockClickUntil = Date.now() + 200;
         item.style.transform = '';
         reveal.style.opacity = '0';
         reveal.style.pointerEvents = 'none';
+        revealed = false;
       }
+      /* If dx === 0, treat as a normal tap — let click through */
+    });
+    
+    item.addEventListener('touchcancel', () => {
+      active = false;
+      item.style.transform = '';
+      reveal.style.opacity = '0';
+      reveal.style.pointerEvents = 'none';
+      revealed = false;
     });
   });
 }
@@ -2825,6 +2885,17 @@ function _drawSummary() {
   if (vndTitle) vndTitle.textContent = `By vendor — ${rangeLabel.toLowerCase()}`;
   renderVendorBars(sumRange, 'vendor-bars');
   renderDowHeatmap(pool);
+  
+  /* Wire the "Calendar" button next to the DOW heatmap title */
+  const calBtn = document.getElementById('full-calendar-btn');
+  if (calBtn) {
+    calBtn.onclick = () => {
+      haptic(6);
+      _calendarViewMonth = null;  /* Reset to current month each time */
+      if (typeof showFullCalendar === 'function') showFullCalendar();
+    };
+  }
+  
   renderTopVendorInsights(pool);
   const pmtDonutTitle = document.getElementById('sum-pmt-donut-title');
   if (pmtDonutTitle) pmtDonutTitle.textContent = 'By Payment — ' + rangeLabel.toLowerCase();
@@ -3805,23 +3876,16 @@ function renderSettings() {
     }
   }
 
-  /* Date format & week start */
+  /* Date format (week-start moved to dedicated picker in Manage tab) */
   const dfSel = document.getElementById('set-date-format');
-  const wsSel = document.getElementById('set-week-start');
   if (dfSel) {
     dfSel.value = cfg.dateFormat || 'DMY';
-    wsSel.value = cfg.weekStart || 'mon';
     if (!dfSel.dataset.bound) {
       dfSel.dataset.bound = '1';
       dfSel.addEventListener('change', () => {
         cfg.dateFormat = dfSel.value;
         persist(); renderAll();
         showToast('Date format updated');
-      });
-      wsSel.addEventListener('change', () => {
-        cfg.weekStart = wsSel.value;
-        persist(); renderAll();
-        showToast('Week start updated');
       });
     }
   }
@@ -4216,6 +4280,46 @@ function renderSettings() {
       }
     }
   }
+  
+  /* ── WEEK-START PICKER ── */
+  const wsPicker = document.getElementById('week-start-picker');
+  if (wsPicker) {
+    const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    const dayFull = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const wsKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const currentWs = cfg.weekStart || 'mon';
+    
+    wsPicker.innerHTML = dayLabels.map((label, i) => {
+      const isStart = wsKeys[i] === currentWs;
+      return '<button class="week-start-btn" data-day="' + wsKeys[i] + '" style="padding:12px 0;border-radius:9px;border:1.5px solid ' + 
+        (isStart ? 'var(--acc)' : 'var(--brd2)') + 
+        ';background:' + (isStart ? 'var(--acc-l)' : 'var(--surf2)') +
+        ';color:' + (isStart ? 'var(--acc)' : 'var(--text2)') +
+        ';font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:2px">' +
+        '<span>' + label + '</span>' +
+        '<span style="font-size:8px;font-weight:500;opacity:0.7">' + dayFull[i] + '</span>' +
+        '</button>';
+    }).join('');
+    
+    wsPicker.querySelectorAll('.week-start-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        haptic(6);
+        cfg.weekStart = btn.dataset.day;
+        persist();
+        renderSettings();
+        if (typeof renderSummary === 'function') {
+          try { renderSummary(); } catch(e) {}
+        }
+        showToast('Week starts on ' + dayFull[wsKeys.indexOf(btn.dataset.day)]);
+      });
+    });
+    
+    const wsSummary = document.getElementById('week-start-summary');
+    if (wsSummary) {
+      const idx = wsKeys.indexOf(currentWs);
+      wsSummary.textContent = 'Week starts on ' + dayFull[idx >= 0 ? idx : 1];
+    }
+  }
 
   /* ── DRAG-TO-REORDER HELPER (works with mouse + touch) ── */
   function enableDragReorder(containerId, cfgKey) {
@@ -4332,11 +4436,23 @@ function renderSettings() {
         persist(); populateForm(); renderAll(); renderSettings();
         showToast('Category renamed');
       },
-      () => { 
+      async () => { 
         const removed = cfg.cats[i];
+        const usedCount = exps.filter(e => e.category === removed).length;
+        const ok = await showConfirm({
+          title: 'Delete category "' + escHtml(removed) + '"?',
+          message: usedCount > 0
+            ? 'This category is used in ' + usedCount + ' expense' + (usedCount === 1 ? '' : 's') + '. They will keep the category name but it won\'t appear in the picker anymore.'
+            : 'This will remove the category. This cannot be undone.',
+          confirmText: 'Delete',
+          danger: true,
+          icon: '🗑️'
+        });
+        if (!ok) return;
         cfg.cats.splice(i, 1); 
         if (cfg.subcats) delete cfg.subcats[removed];
         persist(); renderSettings(); populateForm(); 
+        showToast('Category deleted');
       },
       (emoji) => { cfg.catIcons[c] = emoji; persist(); renderSettings(); populateForm(); showToast('Icon updated'); }
     );
@@ -4504,7 +4620,23 @@ function renderSettings() {
         persist(); populateForm(); renderAll(); renderSettings();
         showToast('Payment method renamed');
       },
-      () => { cfg.pmts.splice(i, 1); persist(); renderSettings(); populateForm(); },
+      async () => { 
+        const removed = cfg.pmts[i];
+        const usedCount = exps.filter(e => e.payment === removed).length;
+        const ok = await showConfirm({
+          title: 'Delete payment "' + escHtml(removed) + '"?',
+          message: usedCount > 0
+            ? 'This payment method is used in ' + usedCount + ' expense' + (usedCount === 1 ? '' : 's') + '. They will keep the payment name but it won\'t appear in the picker anymore.'
+            : 'This will remove the payment method. This cannot be undone.',
+          confirmText: 'Delete',
+          danger: true,
+          icon: '🗑️'
+        });
+        if (!ok) return;
+        cfg.pmts.splice(i, 1); 
+        persist(); renderSettings(); populateForm(); 
+        showToast('Payment method deleted');
+      },
       (emoji) => { cfg.pmtIcons[p] = emoji; persist(); renderSettings(); populateForm(); showToast('Icon updated'); }
     ));
   });
@@ -5627,15 +5759,23 @@ function renderRecurringList() {
     '</div>';
   }).join('');
   list.querySelectorAll('.recur-del').forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       haptic(8);
       const idx = parseInt(btn.dataset.idx);
-      if (confirm('Remove "' + cfg.recurring[idx].name + '" from recurring expenses?')) {
-        cfg.recurring.splice(idx, 1);
-        persist();
-        renderRecurringList();
-        showToast('Recurring expense removed');
-      }
+      const r = cfg.recurring[idx];
+      if (!r) return;
+      const ok = await showConfirm({
+        title: 'Remove recurring expense?',
+        message: '"' + escHtml(r.name) + '" will no longer be auto-added each month. Existing expenses already created from this recurring will not be deleted.',
+        confirmText: 'Remove',
+        danger: true,
+        icon: '🗑️'
+      });
+      if (!ok) return;
+      cfg.recurring.splice(idx, 1);
+      persist();
+      renderRecurringList();
+      showToast('Recurring expense removed');
     };
   });
 }
@@ -7454,53 +7594,435 @@ function updateVendorSuggestions() {
 function renderDowHeatmap(pool) {
   const el = document.getElementById('dow-heatmap');
   if (!el) return;
-  if (!pool.length) { el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:4px 0">No data in selected range</div>'; return; }
   const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const wsKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const startIdx = wsKeys.indexOf(cfg.weekStart || 'mon');
+  
+  /* === CURRENT WEEK ONLY ===
+     Compute the start-of-week date based on cfg.weekStart, and only count
+     expenses from that date through today. Future days in this week show blank. */
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayDow = today.getDay();
+  /* Days back from today to reach the week-start day */
+  const daysBack = (todayDow - startIdx + 7) % 7;
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - daysBack);
+  
+  const isoDate = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  const weekStartStr = isoDate(weekStart);
+  const todayStr = isoDate(today);
+  
+  /* Filter the entire exps list (NOT pool — pool is filtered by summary range, but
+     "current week" is its own concept independent of the range filter) */
+  const weekExps = exps.filter(e => e.date >= weekStartStr && e.date <= todayStr);
+  
+  if (!weekExps.length) { 
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:4px 0">No expenses this week yet</div>';
+    return;
+  }
+  
   const totals = [0,0,0,0,0,0,0];
   const counts = [0,0,0,0,0,0,0];
-  pool.forEach(e => {
+  weekExps.forEach(e => {
     const d = new Date(e.date+'T00:00:00').getDay();
     totals[d] += parseFloat(e.amount);
     counts[d]++;
   });
   const maxT = Math.max(...totals, 1);
-  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">
-    ${days.map(d => `<div style="font-size:10px;color:var(--text3);text-align:center;font-weight:500">${d}</div>`).join('')}
-  </div>
-  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">
-    ${totals.map((t,i) => {
+  
+  /* Determine which days have already happened this week (for "future" greyout) */
+  const happenedThisWeek = new Set();
+  for (let i = 0; i <= daysBack; i++) {
+    const d = new Date(weekStart);
+    d.setDate(weekStart.getDate() + i);
+    happenedThisWeek.add(d.getDay());
+  }
+  
+  /* Build display order based on (already declared) startIdx */
+  const order = [];
+  for (let i = 0; i < 7; i++) order.push((startIdx + i) % 7);
+  
+  el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">' +
+    order.map(i => '<div style="font-size:10px;color:var(--text3);text-align:center;font-weight:500">' + days[i] + '</div>').join('') +
+    '</div>' +
+  '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">' +
+    order.map(i => {
+      const t = totals[i];
+      const isFuture = !happenedThisWeek.has(i);
       const intensity = Math.round((t/maxT)*100);
-      const bg = t===0 ? 'var(--surf2)'
-        : intensity > 75 ? 'var(--acc)'
-        : intensity > 40 ? 'var(--acc-t)'
-        : 'var(--acc-l)';
-      const textCol = intensity > 75 ? 'white' : 'var(--text2)';
-      return `<button class="dow-tile" data-dow="${i}" style="aspect-ratio:1;border-radius:7px;background:${bg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:0;cursor:${t>0?'pointer':'default'};font-family:var(--font);transition:transform .12s" title="${days[i]}: ${fmt(Math.round(t))} (tap for details)">
-        ${t>0 ? `<span style="font-size:9px;font-weight:600;color:${textCol};font-family:var(--mono)">${cfg.sym}${Math.round(t/1000)>0?Math.round(t/1000)+'k':Math.round(t)}</span>` : ''}
-      </button>`;
-    }).join('')}
-  </div>
-  <div style="display:flex;justify-content:flex-end;gap:6px;align-items:center;margin-top:4px">
-    <span style="font-size:10px;color:var(--text3)">Low</span>
-    <div style="width:10px;height:10px;border-radius:3px;background:var(--acc-l)"></div>
-    <div style="width:10px;height:10px;border-radius:3px;background:var(--acc-t)"></div>
-    <div style="width:10px;height:10px;border-radius:3px;background:var(--acc)"></div>
-    <span style="font-size:10px;color:var(--text3)">High</span>
-  </div>`;
+      
+      let bg, textCol;
+      if (isFuture) {
+        /* Days that haven't happened yet this week */
+        bg = 'transparent';
+        textCol = 'var(--text3)';
+      } else if (t === 0) {
+        bg = 'var(--surf2)';
+        textCol = 'var(--text3)';
+      } else if (intensity > 75) {
+        bg = 'var(--acc)'; textCol = 'white';
+      } else if (intensity > 40) {
+        bg = 'rgba(42,82,212,0.55)'; textCol = 'white';
+      } else {
+        bg = 'var(--acc-l)'; textCol = 'var(--text2)';
+      }
+      
+      const isToday = i === todayDow;
+      const todayBorder = isToday ? 'box-shadow:0 0 0 2px #00ffd5,0 0 8px rgba(0,255,213,0.6);' : '';
+      const futureBorder = isFuture ? 'border:1px dashed var(--brd2);' : 'border:0;';
+      const cursor = (t > 0 && !isFuture) ? 'pointer' : 'default';
+      const titleText = isFuture
+        ? days[i] + ' (upcoming)'
+        : days[i] + ': ' + fmt(Math.round(t)) + (t > 0 ? ' (tap for details)' : '') + (isToday ? ' · today' : '');
+      
+      return '<button class="dow-tile" data-dow="' + i + '" data-future="' + (isFuture ? '1' : '0') + '" style="aspect-ratio:1;border-radius:7px;background:' + bg + ';display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:' + cursor + ';font-family:var(--font);transition:transform .12s;' + futureBorder + todayBorder + '" title="' + titleText + '">' +
+        (t > 0 && !isFuture ? '<span style="font-size:9px;font-weight:600;color:' + textCol + ';font-family:var(--mono)">' + cfg.sym + (Math.round(t/1000) > 0 ? Math.round(t/1000) + 'k' : Math.round(t)) + '</span>' : '') +
+      '</button>';
+    }).join('') +
+    '</div>' +
+    '<div style="display:flex;justify-content:flex-end;gap:6px;align-items:center;margin-top:4px">' +
+      '<span style="font-size:10px;color:var(--text3)">Low</span>' +
+      '<div style="width:10px;height:10px;border-radius:3px;background:var(--acc-l)"></div>' +
+      '<div style="width:10px;height:10px;border-radius:3px;background:rgba(42,82,212,0.55)"></div>' +
+      '<div style="width:10px;height:10px;border-radius:3px;background:var(--acc)"></div>' +
+      '<span style="font-size:10px;color:var(--text3)">High</span>' +
+    '</div>';
   
   /* Wire up day-of-week tile clicks */
   el.querySelectorAll('.dow-tile').forEach(btn => {
     btn.addEventListener('click', () => {
+      if (btn.dataset.future === '1') return; /* Future day */
       const dow = parseInt(btn.dataset.dow);
       const total = totals[dow];
       if (total <= 0) return; /* No data for this day */
       haptic(6);
+      /* Pass full exps as pool so the breakdown sheet has historical context for that day-of-week */
       showDayOfWeekBreakdown(pool, dow, days[dow]);
     });
   });
 }
 
 /* Sheet showing breakdown for a specific day of week */
+/* Single-day detail sheet — shows all expenses on a specific date */
+/* Full calendar viewer — single month with prev/next navigation, can view any month */
+let _calendarViewMonth = null;  /* state — defaults to current month on first open */
+
+function showFullCalendar() {
+  /* Initialize to current month if first open */
+  if (!_calendarViewMonth) {
+    const now = new Date();
+    _calendarViewMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+  
+  const existing = document.getElementById('full-cal-sheet');
+  if (existing) existing.remove();
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'full-cal-sheet';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  overlay.innerHTML = '<div id="fc-content" style="background:var(--surf);border-radius:18px 18px 0 0;width:100%;max-width:440px;max-height:88vh;overflow-y:auto;animation:slideUp .25s ease-out"></div>';
+  overlay.innerHTML += '<style>@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}</style>';
+  document.body.appendChild(overlay);
+  
+  const close = () => { overlay.style.opacity = '0'; overlay.style.transition = 'opacity .15s'; setTimeout(() => overlay.remove(), 150); };
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  
+  function renderMonth() {
+    const content = overlay.querySelector('#fc-content');
+    if (!content) return;
+    
+    const [y, m] = _calendarViewMonth.split('-').map(Number);
+    const monthLabel = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const firstDayOfMonth = new Date(y, m - 1, 1).getDay();
+    
+    /* Per-date totals for this month */
+    const dateTotals = {};
+    exps.forEach(e => {
+      if (e.date && e.date.startsWith(_calendarViewMonth)) {
+        dateTotals[e.date] = (dateTotals[e.date] || 0) + parseFloat(e.amount || 0);
+      }
+    });
+    const monthTotal = Object.values(dateTotals).reduce((s, v) => s + v, 0);
+    const monthCount = Object.keys(dateTotals).length;
+    const maxAmt = Math.max(...Object.values(dateTotals), 1);
+    
+    /* Today + week-start */
+    const today = new Date();
+    const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    const wsKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const startIdx = wsKeys.indexOf(cfg.weekStart || 'mon');
+    const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const orderedHeaders = dayHeaders.slice(startIdx).concat(dayHeaders.slice(0, startIdx));
+    const leadingBlanks = (firstDayOfMonth - startIdx + 7) % 7;
+    
+    /* Determine if user can navigate prev/next (data-bounded) */
+    const allDates = exps.map(e => e.date).filter(Boolean).sort();
+    const earliestYM = allDates.length > 0 ? allDates[0].slice(0, 7) : _calendarViewMonth;
+    const todayYM = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
+    const canGoNext = _calendarViewMonth < todayYM;  /* don't browse future */
+    const canGoPrev = true;  /* always allow going back */
+    
+    let html = '';
+    
+    /* Header — sticky, with navigation */
+    html += '<div style="padding:16px 20px;border-bottom:0.5px solid var(--brd);position:sticky;top:0;background:var(--surf);z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+      '<button id="fc-prev" ' + (canGoPrev ? '' : 'disabled') + ' style="background:var(--surf2);border:0;width:34px;height:34px;border-radius:50%;font-size:18px;cursor:' + (canGoPrev ? 'pointer' : 'default') + ';color:var(--text2);flex-shrink:0;opacity:' + (canGoPrev ? '1' : '0.3') + '">‹</button>' +
+      '<div style="flex:1;text-align:center;min-width:0">' +
+        '<div style="font-size:16px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + monthLabel + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + (monthCount > 0 ? monthCount + ' day' + (monthCount === 1 ? '' : 's') + ' · ' + fmt(Math.round(monthTotal)) : 'No expenses') + '</div>' +
+      '</div>' +
+      '<button id="fc-next" ' + (canGoNext ? '' : 'disabled') + ' style="background:var(--surf2);border:0;width:34px;height:34px;border-radius:50%;font-size:18px;cursor:' + (canGoNext ? 'pointer' : 'default') + ';color:var(--text2);flex-shrink:0;opacity:' + (canGoNext ? '1' : '0.3') + '">›</button>' +
+      '<button id="fc-close" style="background:var(--surf2);border:0;width:34px;height:34px;border-radius:50%;font-size:18px;cursor:pointer;color:var(--text2);flex-shrink:0;margin-left:4px">×</button>' +
+    '</div>';
+    
+    /* "Today" jump button if not on current month */
+    if (_calendarViewMonth !== todayYM) {
+      html += '<div style="padding:10px 20px 0;text-align:center"><button id="fc-today" style="background:var(--acc-l);color:var(--acc);border:0;border-radius:8px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font)">Jump to today</button></div>';
+    }
+    
+    /* Day headers */
+    html += '<div style="padding:14px 20px 6px"><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">';
+    orderedHeaders.forEach(h => {
+      html += '<div style="font-size:10px;font-weight:600;color:var(--text3);text-align:center;padding:2px 0">' + h + '</div>';
+    });
+    html += '</div>';
+    
+    /* Calendar grid */
+    html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">';
+    for (let i = 0; i < leadingBlanks; i++) html += '<div></div>';
+    
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = _calendarViewMonth + '-' + String(d).padStart(2, '0');
+      const amt = dateTotals[dateStr] || 0;
+      const intensity = maxAmt > 0 ? amt / maxAmt : 0;
+      const isToday = dateStr === todayStr;
+      const isFuture = dateStr > todayStr;
+      
+      let bg, txtCol;
+      if (isFuture) {
+        bg = 'transparent';
+        txtCol = 'var(--text3)';
+      } else if (amt === 0) {
+        bg = 'var(--surf2)'; txtCol = 'var(--text3)';
+      } else if (intensity > 0.66) {
+        bg = 'var(--acc)'; txtCol = '#fff';
+      } else if (intensity > 0.33) {
+        bg = 'rgba(42,82,212,0.55)'; txtCol = '#fff';
+      } else {
+        bg = 'var(--acc-l)'; txtCol = 'var(--acc)';
+      }
+      
+      const todayBorder = isToday ? 'box-shadow:0 0 0 2px #00ffd5,0 0 8px rgba(0,255,213,0.6);border:1px solid #00ffd5;' : '';
+      const futureBorder = isFuture ? 'border:1px dashed var(--brd2);' : (isToday ? '' : 'border:0;');
+      const cursor = (amt > 0 && !isFuture) ? 'pointer' : 'default';
+      
+      html += '<div class="fc-day-tile" data-date="' + dateStr + '" data-clickable="' + ((amt > 0 && !isFuture) ? '1' : '0') + '" style="aspect-ratio:1/1;background:' + bg + ';border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:var(--mono);cursor:' + cursor + ';' + futureBorder + todayBorder + '" title="' + dateStr + (amt > 0 ? ' · ' + fmt(amt) + ' · tap for details' : '') + '">' +
+        '<span style="font-size:11px;font-weight:700;color:' + txtCol + ';line-height:1.1">' + d + '</span>';
+      if (amt > 0 && !isFuture) {
+        html += '<span style="font-size:8px;color:' + txtCol + ';opacity:0.85;line-height:1">' + (amt >= 1000 ? Math.round(amt/1000) + 'k' : Math.round(amt)) + '</span>';
+      }
+      html += '</div>';
+    }
+    
+    html += '</div></div>';  /* close grid + padding wrapper */
+    
+    /* Legend */
+    html += '<div style="padding:0 20px 20px;display:flex;justify-content:center;gap:8px;align-items:center;font-size:10px;color:var(--text3)">' +
+      '<span>Less</span>' +
+      '<div style="width:11px;height:11px;border-radius:3px;background:var(--surf2)"></div>' +
+      '<div style="width:11px;height:11px;border-radius:3px;background:var(--acc-l)"></div>' +
+      '<div style="width:11px;height:11px;border-radius:3px;background:rgba(42,82,212,0.55)"></div>' +
+      '<div style="width:11px;height:11px;border-radius:3px;background:var(--acc)"></div>' +
+      '<span>More</span>' +
+    '</div>';
+    
+    content.innerHTML = html;
+    
+    /* Wire navigation buttons */
+    const prevBtn = content.querySelector('#fc-prev');
+    if (prevBtn && canGoPrev) {
+      prevBtn.onclick = () => {
+        haptic(4);
+        const [yy, mm] = _calendarViewMonth.split('-').map(Number);
+        const newDate = new Date(yy, mm - 2, 1);
+        _calendarViewMonth = newDate.getFullYear() + '-' + String(newDate.getMonth() + 1).padStart(2, '0');
+        renderMonth();
+      };
+    }
+    const nextBtn = content.querySelector('#fc-next');
+    if (nextBtn && canGoNext) {
+      nextBtn.onclick = () => {
+        haptic(4);
+        const [yy, mm] = _calendarViewMonth.split('-').map(Number);
+        const newDate = new Date(yy, mm, 1);
+        _calendarViewMonth = newDate.getFullYear() + '-' + String(newDate.getMonth() + 1).padStart(2, '0');
+        renderMonth();
+      };
+    }
+    const todayBtn = content.querySelector('#fc-today');
+    if (todayBtn) {
+      todayBtn.onclick = () => {
+        haptic(4);
+        _calendarViewMonth = todayYM;
+        renderMonth();
+      };
+    }
+    content.querySelector('#fc-close').onclick = close;
+    
+    /* Wire day tile clicks */
+    content.querySelectorAll('.fc-day-tile').forEach(tile => {
+      tile.onclick = (ev) => {
+        ev.stopPropagation();
+        if (tile.dataset.clickable !== '1') return;
+        haptic(6);
+        if (typeof showDayDetail === 'function') showDayDetail(tile.dataset.date);
+      };
+    });
+  }
+  
+  renderMonth();
+}
+
+function showDayDetail(dateStr) {
+  const existing = document.getElementById('day-detail-sheet');
+  if (existing) existing.remove();
+  
+  /* Build overlay once, rerender contents on prev/next */
+  const overlay = document.createElement('div');
+  overlay.id = 'day-detail-sheet';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  overlay.innerHTML = '<div id="dd-content" style="background:var(--surf);border-radius:18px 18px 0 0;width:100%;max-width:440px;max-height:88vh;overflow-y:auto;animation:slideUp .25s ease-out"></div>';
+  overlay.innerHTML += '<style>@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}</style>';
+  document.body.appendChild(overlay);
+  
+  const close = () => { overlay.style.opacity = '0'; overlay.style.transition = 'opacity .15s'; setTimeout(() => overlay.remove(), 150); };
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  
+  /* Bounds: earliest expense date — today */
+  const allDates = exps.map(e => e.date).filter(Boolean).sort();
+  const earliest = allDates[0] || dateStr;
+  const today = new Date();
+  const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  
+  const isoDate = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  const shiftDate = (str, delta) => {
+    const d = new Date(str + 'T00:00:00');
+    d.setDate(d.getDate() + delta);
+    return isoDate(d);
+  };
+  
+  let currentDate = dateStr;
+  
+  function renderDay() {
+    const content = overlay.querySelector('#dd-content');
+    if (!content) return;
+    
+    const items = exps.filter(e => e.date === currentDate);
+    const total = items.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+    const count = items.length;
+    
+    const dateObj = new Date(currentDate + 'T00:00:00');
+    const fullLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    const isToday = currentDate === todayStr;
+    const canGoPrev = currentDate > earliest;
+    const canGoNext = currentDate < todayStr;
+    
+    const catMap = {};
+    items.forEach(e => {
+      const cat = e.category || 'Other';
+      if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
+      catMap[cat].total += parseFloat(e.amount || 0);
+      catMap[cat].count += 1;
+    });
+    const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
+  
+    let html = '';
+    
+    /* Header with prev/next day arrows */
+    const headerBg = isToday ? 'rgba(0,255,213,0.08)' : 'var(--surf)';
+    const headerBorder = isToday ? 'border-bottom:2px solid #00ffd5;' : 'border-bottom:0.5px solid var(--brd);';
+    html += '<div style="padding:14px 16px;' + headerBorder + 'position:sticky;top:0;background:' + headerBg + ';z-index:1;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px)">' +
+      '<button id="dd-prev" ' + (canGoPrev ? '' : 'disabled') + ' style="background:var(--surf2);border:0;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:' + (canGoPrev ? 'pointer' : 'default') + ';color:var(--text2);flex-shrink:0;opacity:' + (canGoPrev ? '1' : '0.3') + '">‹</button>' +
+      '<div style="flex:1;min-width:0;text-align:center">' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + fullLabel + (isToday ? ' · today' : '') + '</div>' +
+        '<div style="font-size:10px;color:var(--text3);margin-top:1px">' + (count > 0 ? count + ' expense' + (count === 1 ? '' : 's') : 'No expenses') + '</div>' +
+      '</div>' +
+      '<button id="dd-next" ' + (canGoNext ? '' : 'disabled') + ' style="background:var(--surf2);border:0;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:' + (canGoNext ? 'pointer' : 'default') + ';color:var(--text2);flex-shrink:0;opacity:' + (canGoNext ? '1' : '0.3') + '">›</button>' +
+      '<button id="dd-close-btn" style="background:var(--surf2);border:0;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;color:var(--text2);flex-shrink:0;margin-left:2px">×</button>' +
+    '</div>';
+  
+    if (count === 0) {
+      html += '<div style="padding:40px 20px;text-align:center;color:var(--text3);font-size:13px">No expenses logged on this day</div>';
+    } else {
+      /* Total */
+      html += '<div style="padding:14px 20px">' +
+        '<div style="background:var(--acc-l);border-radius:10px;padding:14px;text-align:center">' +
+          '<div style="font-size:9px;color:var(--acc);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:4px">Total Spent</div>' +
+          '<div style="font-size:22px;font-weight:700;color:var(--acc);font-family:var(--mono)">' + fmt(Math.round(total)) + '</div>' +
+        '</div>' +
+      '</div>';
+      
+      /* By Category */
+      if (sortedCats.length > 1) {
+        html += '<div style="padding:8px 20px 14px">' +
+          '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;margin-bottom:10px">By Category</div>';
+        sortedCats.forEach(([catName, info]) => {
+          const catIcon = (cfg.catIcons && cfg.catIcons[catName]) || (typeof CAT_ICONS !== 'undefined' && CAT_ICONS[catName]) || '📦';
+          const pct = total > 0 ? ((info.total / total) * 100).toFixed(0) : 0;
+          html += '<div style="display:flex;align-items:center;gap:10px;padding:6px 0">' +
+            '<span style="width:22px;text-align:center;flex-shrink:0;font-size:14px">' + catIcon + '</span>' +
+            '<span style="flex:1;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(catName) + '</span>' +
+            '<span style="font-size:12px;font-family:var(--mono);color:var(--text);font-weight:600">' + fmt(Math.round(info.total)) + '</span>' +
+            '<span style="font-size:10px;color:var(--text3);font-family:var(--mono);min-width:32px;text-align:right">' + pct + '%</span>' +
+          '</div>';
+        });
+        html += '</div>';
+      }
+      
+      /* All expenses on this day */
+      html += '<div style="padding:8px 20px 24px">' +
+        '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;margin-bottom:10px">Expenses</div>';
+      items.forEach(e => {
+        const catIcon = (cfg.catIcons && cfg.catIcons[e.category]) || (typeof CAT_ICONS !== 'undefined' && CAT_ICONS[e.category]) || '📦';
+        const subText = e.subcategory ? ' · ' + escHtml(e.subcategory) : '';
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--brd)">' +
+          '<span style="font-size:18px">' + catIcon + '</span>' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(e.name || e.category || 'Untitled') + '</div>' +
+            '<div style="font-size:11px;color:var(--text3)">' + escHtml(e.category || 'Other') + subText + ' · ' + escHtml(e.payment || '') + '</div>' +
+          '</div>' +
+          '<span style="font-size:13px;font-weight:600;font-family:var(--mono);color:var(--text)">' + fmt(e.amount) + '</span>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+    
+    content.innerHTML = html;
+    
+    /* Wire navigation buttons */
+    content.querySelector('#dd-close-btn').onclick = close;
+    const prevBtn = content.querySelector('#dd-prev');
+    if (prevBtn && canGoPrev) {
+      prevBtn.onclick = () => {
+        haptic(4);
+        currentDate = shiftDate(currentDate, -1);
+        renderDay();
+      };
+    }
+    const nextBtn = content.querySelector('#dd-next');
+    if (nextBtn && canGoNext) {
+      nextBtn.onclick = () => {
+        haptic(4);
+        currentDate = shiftDate(currentDate, 1);
+        renderDay();
+      };
+    }
+  }
+  
+  renderDay();
+}
+
 function showDayOfWeekBreakdown(pool, dow, dayName) {
   const existing = document.getElementById('dow-breakdown-sheet');
   if (existing) existing.remove();
@@ -7587,58 +8109,9 @@ function showDayOfWeekBreakdown(pool, dow, dayName) {
     });
     html += '</div>';
   }
-  
-  /* Calendar view: every occurrence of this day-of-week with spending */
-  if (dowExps.length > 0) {
-    /* Build per-date totals */
-    const dateTotals = {};
-    dowExps.forEach(e => {
-      dateTotals[e.date] = (dateTotals[e.date] || 0) + parseFloat(e.amount || 0);
-    });
-    const sortedDates = Object.keys(dateTotals).sort();  /* oldest first */
-    const maxAmt = Math.max(...Object.values(dateTotals), 1);
+
+  /* Embedded calendar removed — use the dedicated "Calendar" button instead */
     
-    /* Group by month for cleaner display */
-    const byMonth = {};
-    sortedDates.forEach(d => {
-      const ym = d.slice(0, 7);
-      if (!byMonth[ym]) byMonth[ym] = [];
-      byMonth[ym].push(d);
-    });
-    const monthKeys = Object.keys(byMonth).sort();
-    
-    html += '<div style="padding:8px 20px 14px">' +
-      '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;margin-bottom:10px">All ' + dayName + 's (' + sortedDates.length + ')</div>';
-    
-    monthKeys.forEach(mk => {
-      const [y, m] = mk.split('-');
-      const monthLabel = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      const monthTotal = byMonth[mk].reduce((s, d) => s + dateTotals[d], 0);
-      
-      html += '<div style="margin-bottom:14px">' +
-        '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">' +
-          '<span style="font-size:11px;font-weight:600;color:var(--text2)">' + monthLabel + '</span>' +
-          '<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">' + fmt(Math.round(monthTotal)) + '</span>' +
-        '</div>' +
-        '<div style="display:flex;flex-wrap:wrap;gap:4px">';
-      
-      byMonth[mk].forEach(d => {
-        const amt = dateTotals[d];
-        const intensity = amt / maxAmt;
-        const bg = intensity > 0.75 ? 'var(--acc)' : intensity > 0.4 ? 'var(--acc-t, var(--acc))' : 'var(--acc-l)';
-        const txtCol = intensity > 0.75 ? '#fff' : 'var(--text2)';
-        const dayNum = parseInt(d.slice(8, 10));
-        html += '<div style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:5px 7px;background:' + bg + ';border-radius:6px;min-width:36px" title="' + d + ': ' + fmt(amt) + '">' +
-          '<span style="font-size:11px;font-weight:700;color:' + txtCol + ';font-family:var(--mono)">' + dayNum + '</span>' +
-          '<span style="font-size:9px;color:' + txtCol + ';opacity:0.85;font-family:var(--mono)">' + (amt >= 1000 ? Math.round(amt/1000) + 'k' : Math.round(amt)) + '</span>' +
-        '</div>';
-      });
-      
-      html += '</div></div>';
-    });
-    html += '</div>';
-  }
-  
   /* Recent expenses on this day */
   if (recent.length > 0) {
     html += '<div style="padding:8px 20px 24px">' +
@@ -7662,6 +8135,17 @@ function showDayOfWeekBreakdown(pool, dow, dayName) {
   html += '</div>';
   overlay.innerHTML = html;
   document.body.appendChild(overlay);
+  
+  /* Wire calendar day tile clicks → open day-detail sheet */
+  overlay.querySelectorAll('.cal-day-tile').forEach(tile => {
+    tile.onclick = (ev) => {
+      ev.stopPropagation();
+      if (tile.dataset.hasExpense !== '1') return;
+      haptic(6);
+      const dateStr = tile.dataset.date;
+      if (dateStr) showDayDetail(dateStr);
+    };
+  });
   
   const close = () => { overlay.style.opacity='0'; overlay.style.transition='opacity .15s'; setTimeout(()=>overlay.remove(), 150); };
   document.getElementById('dow-close-btn').onclick = close;
@@ -8498,7 +8982,7 @@ function showExpenseQuickMenu(id, anchorEl) {
   overlay.querySelectorAll('.qm-btn').forEach(btn => {
     btn.addEventListener('mouseenter', () => btn.style.background = 'var(--surf2)');
     btn.addEventListener('mouseleave', () => btn.style.background = 'transparent');
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const act = btn.dataset.act;
       haptic(8);
       closeMenu();
@@ -8520,11 +9004,17 @@ function showExpenseQuickMenu(id, anchorEl) {
           showToast('Copy not supported');
         }
       } else if (act === 'delete') {
-        if (confirm('Delete "' + exp.name + '"?')) {
-          exps = exps.filter(e => e.id !== id);
-          persist(); renderAll();
-          showToast('Deleted');
-        }
+        const ok = await showConfirm({
+          title: 'Delete this expense?',
+          message: '"' + escHtml(exp.name || exp.category || 'Expense') + '" — ' + fmt(exp.amount) + '. This cannot be undone.',
+          confirmText: 'Delete',
+          danger: true,
+          icon: '🗑️'
+        });
+        if (!ok) return;
+        exps = exps.filter(e => e.id !== id);
+        persist(); renderAll();
+        showToast('Deleted');
       }
     };
   });
