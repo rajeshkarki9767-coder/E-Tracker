@@ -2177,27 +2177,36 @@ function escHtml(s) {
 function setupSwipe() {
   document.querySelectorAll('.exp-item').forEach(item => {
     const reveal = item.querySelector('.swipe-del-reveal');
+    if (!reveal) return;
     let sx = 0, dx = 0, active = false, revealed = false;
-
-    /* Prevent the click handler from firing right after a swipe */
     let blockClickUntil = 0;
 
+    /* Capture-phase click interceptor — runs before the row's openEdit handler */
     item.addEventListener('click', (ev) => {
-      /* If revealed OR within 250ms of a swipe end, intercept the click */
+      /* If the tap is on the reveal button, do NOT intercept — let its onclick run */
+      if (ev.target.closest('.swipe-del-reveal')) {
+        return;  /* allow event through to reveal's onclick */
+      }
+      
+      /* Otherwise, if revealed or just-swiped, swallow the click and reset UI */
       if (revealed || Date.now() < blockClickUntil) {
         ev.stopPropagation();
         ev.preventDefault();
-        /* If revealed, tapping the row (not the X area) should hide it */
-        if (revealed && !ev.target.closest('.swipe-del-reveal')) {
+        if (revealed) {
           item.style.transform = '';
           reveal.style.opacity = '0';
           reveal.style.pointerEvents = 'none';
           revealed = false;
         }
       }
-    }, true);  /* capture phase so we run before the openEdit click handler */
+    }, true);
 
     item.addEventListener('touchstart', e => {
+      /* Don't start a swipe if the touch begins on the reveal button */
+      if (e.target.closest('.swipe-del-reveal')) {
+        active = false;
+        return;
+      }
       sx = e.touches[0].clientX; dx = 0; active = true;
     }, {passive: true});
 
@@ -2206,67 +2215,63 @@ function setupSwipe() {
       dx = e.touches[0].clientX - sx;
       if (Math.abs(dx) > 8) {
         const shift = Math.max(-80, Math.min(0, dx));
-        item.style.transform = `translateX(${shift}px)`;
-        reveal.style.opacity  = String(Math.min(1, Math.abs(shift) / 60));
+        item.style.transform = 'translateX(' + shift + 'px)';
+        reveal.style.opacity = String(Math.min(1, Math.abs(shift) / 60));
       }
     }, {passive: true});
 
     item.addEventListener('touchend', () => {
+      if (!active) return;
       active = false;
       if (dx < -60) {
-        /* Reveal the delete button — don't auto-delete */
         revealed = true;
         item.style.transform = 'translateX(-72px)';
         reveal.style.opacity = '1';
         reveal.style.pointerEvents = 'auto';
-        blockClickUntil = Date.now() + 350;  /* swallow the imminent synthetic click */
-        
-        reveal.onclick = async (ev) => {
-          ev.stopPropagation();
-          ev.preventDefault();
-          const id = item.dataset.id;
-          const exp = exps.find(e => e.id === id);
-          if (!exp) return;
-          
-          /* Confirmation dialog */
-          const ok = await showConfirm({
-            title: 'Delete this expense?',
-            message: '"' + escHtml(exp.name || exp.category || 'Expense') + '" — ' + fmt(exp.amount) + '. This cannot be undone.',
-            confirmText: 'Delete',
-            danger: true,
-            icon: '🗑️'
-          });
-          if (!ok) {
-            /* User cancelled — close the swipe */
-            item.style.transform = '';
-            reveal.style.opacity = '0';
-            reveal.style.pointerEvents = 'none';
-            revealed = false;
-            return;
-          }
-          exps = exps.filter(e => e.id !== id);
-          persist();
-          renderExps();
-          showToast('Deleted');
-        };
-      } else if (dx < -8 || dx > 8) {
-        /* Slight swipe but not enough — reset, also block click briefly */
-        blockClickUntil = Date.now() + 200;
+        blockClickUntil = Date.now() + 400;
+      } else if (Math.abs(dx) > 8) {
+        /* Partial swipe — reset, briefly block any synthetic click */
+        blockClickUntil = Date.now() + 250;
         item.style.transform = '';
         reveal.style.opacity = '0';
         reveal.style.pointerEvents = 'none';
         revealed = false;
       }
-      /* If dx === 0, treat as a normal tap — let click through */
+      /* dx near 0 = normal tap, let it through */
     });
     
     item.addEventListener('touchcancel', () => {
       active = false;
-      item.style.transform = '';
-      reveal.style.opacity = '0';
-      reveal.style.pointerEvents = 'none';
-      revealed = false;
     });
+
+    /* Reveal button click — confirm + delete. Bound once per item. */
+    reveal.onclick = async (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      const id = item.dataset.id;
+      const exp = exps.find(e => e.id === id);
+      if (!exp) return;
+      
+      const ok = await showConfirm({
+        title: 'Delete this expense?',
+        message: '"' + escHtml(exp.name || exp.category || 'Expense') + '" — ' + fmt(exp.amount) + '. This cannot be undone.',
+        confirmText: 'Delete',
+        danger: true,
+        icon: '🗑️'
+      });
+      if (!ok) {
+        /* Cancel — close the swipe */
+        item.style.transform = '';
+        reveal.style.opacity = '0';
+        reveal.style.pointerEvents = 'none';
+        revealed = false;
+        return;
+      }
+      exps = exps.filter(e => e.id !== id);
+      persist();
+      renderExps();
+      showToast('Deleted');
+    };
   });
 }
 
@@ -4202,11 +4207,7 @@ function renderSettings() {
 
   /* ── Vendors — removed from settings (entered inline in form) ── */
 
-  /* Enable drag-to-reorder on cat-set and pmt-set */
-  if (typeof enableDragReorder === 'function') {
-    enableDragReorder('cat-set', 'cats');
-    enableDragReorder('pmt-set', 'pmts');
-  }
+  /* Drag-to-reorder is enabled AFTER rows are populated — see end of renderSettings */
   
   /* Update count badges in section headers */
   const catBadge = document.getElementById('cat-count-badge');
@@ -4640,6 +4641,12 @@ function renderSettings() {
       (emoji) => { cfg.pmtIcons[p] = emoji; persist(); renderSettings(); populateForm(); showToast('Icon updated'); }
     ));
   });
+  
+  /* NOW enable drag-to-reorder — rows exist in DOM */
+  if (typeof enableDragReorder === 'function') {
+    enableDragReorder('cat-set', 'cats');
+    enableDragReorder('pmt-set', 'pmts');
+  }
 }
 
 document.getElementById('add-cat-btn').addEventListener('click', () => {
@@ -5934,9 +5941,9 @@ function openRecurringModal() {
           '</div>' +
         '</div>' +
         '<div>' +
-          '<label style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:6px">Day of month <span style="color:var(--text3);font-weight:400">(1-28)</span></label>' +
-          '<input id="r-day" type="number" min="1" max="28" placeholder="e.g. 1 for the first" style="width:100%;background:var(--surf2);border:0.5px solid var(--brd2);border-radius:10px;padding:12px 14px;font-size:14px;color:var(--text);font-family:var(--font);outline:none;box-sizing:border-box">' +
-          '<div id="r-freq-hint" style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.4">💡 Will be auto-added on this day each month.</div>' +
+          '<label style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:6px">Day of month <span style="color:var(--text3);font-weight:400">(1-31)</span></label>' +
+          '<input id="r-day" type="number" min="1" max="31" placeholder="e.g. 1 for the first" style="width:100%;background:var(--surf2);border:0.5px solid var(--brd2);border-radius:10px;padding:12px 14px;font-size:14px;color:var(--text);font-family:var(--font);outline:none;box-sizing:border-box">' +
+          '<div id="r-freq-hint" style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.4">💡 Auto-added on this day. If the month is shorter (e.g. 31st in February), it falls back to the last day.</div>' +
         '</div>' +
       '</div>' +
       '<div style="position:sticky;bottom:0;background:var(--surf);padding:14px 20px 20px;border-top:0.5px solid var(--brd);display:flex;gap:10px">' +
@@ -6084,7 +6091,7 @@ function openRecurringModal() {
     const day = parseInt(document.getElementById('r-day').value);
     if (!name) { showToast('Please enter a name'); document.getElementById('r-name').focus(); return; }
     if (!amountInput || amountInput <= 0) { showToast('Please enter a valid amount'); document.getElementById('r-amount').focus(); return; }
-    if (!day || day < 1 || day > 28) { showToast('Day must be between 1 and 28'); document.getElementById('r-day').focus(); return; }
+    if (!day || day < 1 || day > 31) { showToast('Day must be between 1 and 31'); document.getElementById('r-day').focus(); return; }
     
     /* Convert to home currency at save time so the displayed amount is correct */
     let amount = amountInput;
@@ -6129,8 +6136,13 @@ function checkRecurringExpenses() {
     /* Default frequency = monthly (backward compat for existing entries) */
     const freq = r.frequency || 'monthly';
     
-    /* Skip if today is before the trigger day */
-    if (today < r.day) return;
+    /* Days in current month — for clamping when r.day exceeds month length (e.g. 31st in Feb) */
+    const daysInThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    /* Effective trigger day: use r.day, but clamped to last day of this month if shorter */
+    const effectiveDay = Math.min(r.day, daysInThisMonth);
+    
+    /* Skip if today is before the effective trigger day */
+    if (today < effectiveDay) return;
     
     /* Determine if it's time to add based on frequency + lastAdded */
     let shouldAdd = false;
@@ -6146,7 +6158,7 @@ function checkRecurringExpenses() {
     }
     
     if (shouldAdd) {
-      const date = ym + '-' + String(r.day).padStart(2,'0');
+      const date = ym + '-' + String(effectiveDay).padStart(2,'0');
       
       /* If foreign currency, fetch fresh rate at charge time (locked-on-charge) */
       let amountToUse = r.amount;
