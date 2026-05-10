@@ -1387,9 +1387,26 @@ html.theme-light{
       </div>
       <div class="fld">
         <label>Amount</label>
-        <div class="amt-wrap">
-          <span class="amt-pre" id="f-pre">Rs</span>
-          <input type="number" id="f-amt" placeholder="0" min="0" step="0.01" inputmode="decimal">
+        <div style="display:flex;gap:6px;align-items:stretch">
+          <div class="amt-wrap" style="flex:1">
+            <span class="amt-pre" id="f-pre">Rs</span>
+            <input type="number" id="f-amt" placeholder="0" min="0" step="0.01" inputmode="decimal">
+          </div>
+          <button type="button" id="f-fee-toggle" style="flex-shrink:0;background:var(--surf2);border:0.5px solid var(--brd2);border-radius:9px;padding:0 12px;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:4px;white-space:nowrap" title="Add transaction fee">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>Fee</span>
+          </button>
+        </div>
+        <div id="f-fee-row" style="display:none;margin-top:8px">
+          <label style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;display:block;margin-bottom:5px">Transaction Fee</label>
+          <div style="display:flex;gap:6px;align-items:stretch">
+            <div class="amt-wrap" style="flex:1">
+              <span class="amt-pre">Rs</span>
+              <input type="number" id="f-fee" placeholder="0" min="0" step="0.01" inputmode="decimal">
+            </div>
+            <button type="button" id="f-fee-clear" style="flex-shrink:0;background:transparent;border:0.5px solid var(--brd2);border-radius:9px;padding:0 12px;font-size:12px;color:var(--text3);cursor:pointer;font-family:var(--font)" title="Remove fee">×</button>
+          </div>
+          <div style="font-size:10px;color:var(--text3);margin-top:4px">Bank transfer, ATM, currency conversion fees etc.</div>
         </div>
       </div>
       <div class="fld">
@@ -1922,6 +1939,11 @@ function checkMissedReminder() {
 }
 
 /* ─── HELPERS ─── */
+/* Total cost of an expense including any optional fee */
+function expTotal(e) {
+  return parseFloat(e.amount || 0) + parseFloat(e.fee || 0);
+}
+
 function fmt(n) {
   if (cfg.hideAmounts) return cfg.sym + ' •••';
   const num = parseFloat(n);
@@ -2106,7 +2128,7 @@ var _renderExpsRAF; function renderExps() { cancelAnimationFrame(_renderExpsRAF)
   let html = '';
   days.forEach(d => {
     const g   = grp[d].sort((a,b) => b.id.localeCompare(a.id));
-    const tot = g.reduce((s,e) => s + parseFloat(e.amount), 0);
+    const tot = g.reduce((s,e)=>s+expTotal(e), 0);
     const dLabel = (() => {
       const now  = new Date(); const nowStr = now.toISOString().split('T')[0];
       const yest = new Date(now); yest.setDate(yest.getDate()-1);
@@ -2134,7 +2156,10 @@ var _renderExpsRAF; function renderExps() { cancelAnimationFrame(_renderExpsRAF)
           <div class="exp-name">${escHtml(e.name)}</div>
           <div class="exp-meta">${badge}${subBadge}${tagsBadges}<span>${formatExpDate(e.date)}</span></div>
         </div>
-        <div class="exp-amt">${fmt(e.amount)}</div>
+        <div class="exp-amt" style="display:flex;flex-direction:column;align-items:flex-end;gap:1px">
+          <span>${fmt(e.amount)}</span>
+          ${e.fee && e.fee > 0 ? `<span style="font-size:9px;color:var(--text3);font-weight:500;font-family:var(--mono)">+ ${fmt(e.fee)} fee</span>` : ''}
+        </div>
         <div class="swipe-del-reveal"><svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg></div>
       </div>`;
     });
@@ -2564,7 +2589,7 @@ function renderSummary() {
 
 function _drawSummary() {
   const pool = filterByRange(sumRange);
-  const total = pool.reduce((s,e) => s + parseFloat(e.amount), 0);
+  const total = pool.reduce((s,e)=>s+expTotal(e), 0);
   const days  = pool.length > 0 ? Math.max(1, (() => {
     const sorted = [...pool].sort((a,b)=>a.date.localeCompare(b.date));
     const d0 = new Date(sorted[0].date+'T00:00:00'), d1 = new Date(sorted[sorted.length-1].date+'T00:00:00');
@@ -2583,7 +2608,7 @@ function _drawSummary() {
     const span = t - f;
     const pf = new Date(f - span), pt = new Date(f.getTime() - 86400000);
     const pad = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    prevAmt = exps.filter(e=>e.date>=pad(pf)&&e.date<=pad(pt)).reduce((s,e)=>s+parseFloat(e.amount),0);
+    prevAmt = exps.filter(e=>e.date>=pad(pf)&&e.date<=pad(pt)).reduce((s,e)=>s+expTotal(e), 0);
   }
 
   const rangeLabel = sumRange.preset === 'today'   ? 'Today'
@@ -2604,7 +2629,7 @@ function _drawSummary() {
     const now = new Date();
     const ym = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
     const monthSpent = exps.filter(e => e.date && e.date.startsWith(ym))
-      .reduce((s,e) => s + parseFloat(e.amount||0), 0);
+      .reduce((s,e)=>s+expTotal(e), 0);
     const pct = Math.min(100, Math.round(monthSpent/cfg.budget*100));
     const over = monthSpent > cfg.budget;
     const remain = cfg.budget - monthSpent;
@@ -2653,7 +2678,7 @@ function _drawSummary() {
       const lyFromStr = lastYearFrom.toISOString().slice(0,10);
       const lyToStr = lastYearTo.toISOString().slice(0,10);
       const lyExpenses = exps.filter(e => e.date >= lyFromStr && e.date <= lyToStr);
-      const lyTotal = lyExpenses.reduce((s,e) => s + parseFloat(e.amount||0), 0);
+      const lyTotal = lyExpenses.reduce((s,e)=>s+expTotal(e), 0);
       if (lyTotal > 0) {
         const diff = total - lyTotal;
         const pct = Math.round((diff / lyTotal) * 100);
@@ -2857,8 +2882,8 @@ function _drawSummary() {
     const col  = CAT_COLORS[i % CAT_COLORS.length];
     const spark = makeSparkline(c, exps);
     // MoM: compare this month vs last month in full exps (not just the range)
-    const thisM = exps.filter(e=>(e.category||'Other')===c&&e.date.slice(0,7)===thisMk).reduce((s,e)=>s+parseFloat(e.amount),0);
-    const prevM = exps.filter(e=>(e.category||'Other')===c&&e.date.slice(0,7)===prevMk).reduce((s,e)=>s+parseFloat(e.amount),0);
+    const thisM = exps.filter(e=>(e.category||'Other')===c&&e.date.slice(0,7)===thisMk).reduce((s,e)=>s+expTotal(e), 0);
+    const prevM = exps.filter(e=>(e.category||'Other')===c&&e.date.slice(0,7)===prevMk).reduce((s,e)=>s+expTotal(e), 0);
     let momBadge = '';
     if (thisM > 0 && prevM > 0) {
       const pct = ((thisM-prevM)/prevM*100);
@@ -3113,7 +3138,7 @@ function _drawTrends() {
   const cats = [...new Set(pool.map(e=>e.category||'Other'))].slice(0,6);
   const cds  = cats.map((c,ci) => ({
     label: c,
-    data:  months.map(m => parseFloat((pool.filter(e=>dateToKey(e.date)===m&&(e.category||'Other')===c).reduce((s,e)=>s+parseFloat(e.amount),0)).toFixed(2))),
+    data:  months.map(m => parseFloat((pool.filter(e=>dateToKey(e.date)===m&&(e.category||'Other')===c).reduce((s,e)=>s+expTotal(e), 0)).toFixed(2))),
     backgroundColor: CAT_COLORS[ci%CAT_COLORS.length]+'99',
     borderColor:     CAT_COLORS[ci%CAT_COLORS.length],
     borderWidth:1, borderRadius:4, borderSkipped:false
@@ -3186,7 +3211,7 @@ function renderTagTotals(pool) {
       const t = (tRaw || '').trim().toLowerCase();
       if (!t) return;
       if (!tagMap[t]) tagMap[t] = { display: tRaw.trim(), total: 0, count: 0, dates: [], expenses: [] };
-      tagMap[t].total += parseFloat(e.amount) || 0;
+      tagMap[t].total += expTotal(e);
       tagMap[t].count += 1;
       tagMap[t].dates.push(e.date);
       tagMap[t].expenses.push(e);
@@ -3256,7 +3281,7 @@ function showCategoryDrilldown(categoryName, pool) {
     return;
   }
   
-  const total = items.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+  const total = items.reduce((s,e)=>s+expTotal(e), 0);
   const count = items.length;
   const avg = count > 0 ? total / count : 0;
   
@@ -3265,7 +3290,7 @@ function showCategoryDrilldown(categoryName, pool) {
   items.forEach(e => {
     const sub = (e.subcategory || '').trim() || '(no sub-category)';
     if (!subMap[sub]) subMap[sub] = { total: 0, count: 0, expenses: [] };
-    subMap[sub].total += parseFloat(e.amount || 0);
+    subMap[sub].total += expTotal(e);
     subMap[sub].count += 1;
     subMap[sub].expenses.push(e);
   });
@@ -3394,7 +3419,7 @@ function showPaymentDrilldown(paymentName, pool) {
     return;
   }
   
-  const total = items.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+  const total = items.reduce((s,e)=>s+expTotal(e), 0);
   const count = items.length;
   const avg = count > 0 ? total / count : 0;
   
@@ -3403,7 +3428,7 @@ function showPaymentDrilldown(paymentName, pool) {
   items.forEach(e => {
     const cat = (e.category || 'Other').trim() || '(uncategorized)';
     if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
-    catMap[cat].total += parseFloat(e.amount || 0);
+    catMap[cat].total += expTotal(e);
     catMap[cat].count += 1;
   });
   const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
@@ -3523,7 +3548,7 @@ function showVendorDrilldown(vendorName, pool) {
     return;
   }
   
-  const total = items.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+  const total = items.reduce((s,e)=>s+expTotal(e), 0);
   const count = items.length;
   const avg = count > 0 ? total / count : 0;
   
@@ -3532,7 +3557,7 @@ function showVendorDrilldown(vendorName, pool) {
   items.forEach(e => {
     const cat = (e.category || 'Other').trim() || '(uncategorized)';
     if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
-    catMap[cat].total += parseFloat(e.amount || 0);
+    catMap[cat].total += expTotal(e);
     catMap[cat].count += 1;
   });
   const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
@@ -3542,7 +3567,7 @@ function showVendorDrilldown(vendorName, pool) {
   items.forEach(e => {
     const p = (e.payment || 'Other').trim();
     if (!pmtMap[p]) pmtMap[p] = { total: 0, count: 0 };
-    pmtMap[p].total += parseFloat(e.amount || 0);
+    pmtMap[p].total += expTotal(e);
     pmtMap[p].count += 1;
   });
   const sortedPmts = Object.entries(pmtMap).sort((a, b) => b[1].total - a[1].total);
@@ -3855,7 +3880,7 @@ function renderSettings() {
       const now = new Date();
       const ym = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
       const monthSpent = exps.filter(e => e.date && e.date.startsWith(ym))
-        .reduce((s,e) => s + parseFloat(e.amount||0), 0);
+        .reduce((s,e)=>s+expTotal(e), 0);
       const pct = Math.round(monthSpent/cfg.budget*100);
       const remain = cfg.budget - monthSpent;
       budgetStatus.style.display = 'block';
@@ -6391,6 +6416,15 @@ function openAdd() {
   document.getElementById('sheet-title').textContent = 'New expense';
   document.getElementById('f-date').value  = today();
   document.getElementById('f-amt').value   = '';
+  /* Reset fee row */
+  const _feeEl = document.getElementById('f-fee'); if (_feeEl) _feeEl.value = '';
+  const _feeRow = document.getElementById('f-fee-row'); if (_feeRow) _feeRow.style.display = 'none';
+  const _feeBtn = document.getElementById('f-fee-toggle');
+  if (_feeBtn) {
+    _feeBtn.style.background = 'var(--surf2)';
+    _feeBtn.style.color = 'var(--text2)';
+    _feeBtn.style.borderColor = 'var(--brd2)';
+  }
   document.getElementById('f-notes').value = '';
   document.getElementById('f-cat').value   = '';
   /* Reset sub-category */
@@ -6420,6 +6454,25 @@ function openEdit(id) {
   document.getElementById('sheet-title').textContent = 'Edit expense';
   document.getElementById('f-date').value   = e.date;
   document.getElementById('f-amt').value    = e.amount;
+  /* Restore fee if present */
+  const __feeEl = document.getElementById('f-fee');
+  const __feeRow = document.getElementById('f-fee-row');
+  const __feeBtn = document.getElementById('f-fee-toggle');
+  if (__feeEl && __feeRow && __feeBtn) {
+    if (e.fee && e.fee > 0) {
+      __feeEl.value = e.fee;
+      __feeRow.style.display = 'block';
+      __feeBtn.style.background = 'var(--acc-l)';
+      __feeBtn.style.color = 'var(--acc)';
+      __feeBtn.style.borderColor = 'var(--acc)';
+    } else {
+      __feeEl.value = '';
+      __feeRow.style.display = 'none';
+      __feeBtn.style.background = 'var(--surf2)';
+      __feeBtn.style.color = 'var(--text2)';
+      __feeBtn.style.borderColor = 'var(--brd2)';
+    }
+  }
   document.getElementById('f-notes').value  = e.notes || '';
   document.getElementById('save-btn').textContent = 'Save changes';
   document.getElementById('del-btn').style.display = 'block';
@@ -6566,6 +6619,41 @@ document.getElementById('add-item-btn').addEventListener('click', () => {
   setTimeout(() => document.getElementById('f-amt').focus(), 50);
 });
 
+/* ─── FEE TOGGLE WIRING ─── */
+(function setupFeeToggle() {
+  const toggleBtn = document.getElementById('f-fee-toggle');
+  const feeRow = document.getElementById('f-fee-row');
+  const feeInp = document.getElementById('f-fee');
+  const clearBtn = document.getElementById('f-fee-clear');
+  if (!toggleBtn || !feeRow) return;
+  
+  toggleBtn.addEventListener('click', () => {
+    haptic(4);
+    const isOpen = feeRow.style.display !== 'none';
+    if (isOpen) {
+      feeRow.style.display = 'none';
+      feeInp.value = '';
+      toggleBtn.style.background = 'var(--surf2)';
+      toggleBtn.style.color = 'var(--text2)';
+      toggleBtn.style.borderColor = 'var(--brd2)';
+    } else {
+      feeRow.style.display = 'block';
+      toggleBtn.style.background = 'var(--acc-l)';
+      toggleBtn.style.color = 'var(--acc)';
+      toggleBtn.style.borderColor = 'var(--acc)';
+      setTimeout(() => feeInp.focus(), 50);
+    }
+  });
+  
+  clearBtn.addEventListener('click', () => {
+    feeRow.style.display = 'none';
+    feeInp.value = '';
+    toggleBtn.style.background = 'var(--surf2)';
+    toggleBtn.style.color = 'var(--text2)';
+    toggleBtn.style.borderColor = 'var(--brd2)';
+  });
+})();
+
 /* Reset split items when form opens or closes */
 function resetSplitItems() {
   splitItems = [];
@@ -6612,6 +6700,11 @@ document.getElementById('save-btn').addEventListener('click', () => {
   if (pending && !curTags.includes(pending)) curTags.push(pending);
   const notesVal = document.getElementById('f-notes').value.trim();
   const tagsVal  = [...curTags];
+  
+  /* Collect optional fee */
+  const feeEl = document.getElementById('f-fee');
+  const feeRaw = feeEl ? parseFloat(feeEl.value) : 0;
+  const feeVal = (!isNaN(feeRaw) && feeRaw > 0) ? parseFloat(feeRaw.toFixed(2)) : 0;
 
   if (editId) {
     // Editing: update single entry (split payment not available in edit mode)
@@ -6619,18 +6712,24 @@ document.getElementById('save-btn').addEventListener('click', () => {
       id: editId,
       date, amount: parseFloat(amtRaw.toFixed(2)), name,
       category: cat, subcategory: subcat || '', payment: selPmt,
-      tags: tagsVal, notes: notesVal
+      tags: tagsVal, notes: notesVal,
+      fee: feeVal || undefined
     };
     const idx = exps.findIndex(e => e.id === editId); exps[idx] = entry;
   } else if (splitPmts.length >= 2) {
     // Split payment mode: create one entry per payment method
+    /* Fee attaches to the first entry only — it's a per-transaction fee, not per-method */
+    let feeAttached = false;
     splitPmts.forEach((sp, i) => {
       const spAmt = parseFloat((parseFloat(sp.amount) || 0).toFixed(2));
       if (spAmt <= 0) return;
+      const includesFee = !feeAttached && feeVal > 0;
+      if (includesFee) feeAttached = true;
       exps.push({
         id: Date.now().toString() + i + Math.random().toString(36).slice(2,5),
         date, amount: spAmt, name,
         category: cat, subcategory: subcat || '', payment: sp.method,
+        fee: includesFee ? feeVal : undefined,
         tags: tagsVal,
         notes: notesVal
       });
@@ -6650,7 +6749,8 @@ document.getElementById('save-btn').addEventListener('click', () => {
       id: Date.now().toString(),
       date, amount: parseFloat(amtRaw.toFixed(2)), name,
       category: cat, subcategory: subcat || '', payment: selPmt,
-      tags: tagsVal, notes: notesVal
+      tags: tagsVal, notes: notesVal,
+      fee: feeVal || undefined
     });
     // Multi-item split items
     splitItems.forEach(it => {
@@ -6675,7 +6775,7 @@ document.getElementById('save-btn').addEventListener('click', () => {
     const now = new Date();
     const ym = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
     const monthSpent = exps.filter(e => e.date && e.date.startsWith(ym))
-      .reduce((s,e) => s + parseFloat(e.amount||0), 0);
+      .reduce((s,e)=>s+expTotal(e), 0);
     const pct = monthSpent / cfg.budget * 100;
     /* Use sessionStorage to avoid spamming alerts */
     const alertKey = 'et_budget_alert_' + ym;
@@ -7637,7 +7737,7 @@ function renderDowHeatmap(pool) {
   const counts = [0,0,0,0,0,0,0];
   weekExps.forEach(e => {
     const d = new Date(e.date+'T00:00:00').getDay();
-    totals[d] += parseFloat(e.amount);
+    totals[d] += expTotal(e);
     counts[d]++;
   });
   const maxT = Math.max(...totals, 1);
@@ -7931,7 +8031,7 @@ function showDayDetail(dateStr) {
     if (!content) return;
     
     const items = exps.filter(e => e.date === currentDate);
-    const total = items.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+    const total = items.reduce((s,e)=>s+expTotal(e), 0);
     const count = items.length;
     
     const dateObj = new Date(currentDate + 'T00:00:00');
@@ -7944,7 +8044,7 @@ function showDayDetail(dateStr) {
     items.forEach(e => {
       const cat = e.category || 'Other';
       if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
-      catMap[cat].total += parseFloat(e.amount || 0);
+      catMap[cat].total += expTotal(e);
       catMap[cat].count += 1;
     });
     const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
@@ -8046,7 +8146,7 @@ function showDayOfWeekBreakdown(pool, dow, dayName) {
   });
   
   /* Aggregate stats */
-  const total = dowExps.reduce((s, e) => s + parseFloat(e.amount), 0);
+  const total = dowExps.reduce((s,e)=>s+expTotal(e), 0);
   const count = dowExps.length;
   const avg = count > 0 ? total / count : 0;
   const uniqueDates = new Set(dowExps.map(e => e.date)).size;
@@ -8173,7 +8273,7 @@ function makeSparkline(catName, allExps) {
   });
   const vals = months.map(mk =>
     allExps.filter(e => e.category===catName && (e.date.slice(0,7)===mk))
-            .reduce((s,e) => s+parseFloat(e.amount), 0)
+            .reduce((s,e)=>s+expTotal(e), 0)
   );
   const maxV = Math.max(...vals, 1);
   const w=36, h=18, barW=8, gap=3;
@@ -8506,7 +8606,7 @@ function renderCumulativeChart(pool) {
     let cum=0, result=[];
     labels.forEach(day => {
       const dayStr = monthStr+'-'+String(day).padStart(2,'0');
-      const amt = expArr.filter(e=>e.date===dayStr).reduce((s,e)=>s+parseFloat(e.amount),0);
+      const amt = expArr.filter(e=>e.date===dayStr).reduce((s,e)=>s+expTotal(e), 0);
       cum += amt;
       result.push(parseFloat(cum.toFixed(2)));
     });
@@ -8644,7 +8744,7 @@ function renderDomPattern(pool) {
   const dayTotals = Array(31).fill(0), dayCounts = Array(31).fill(0);
   pool.forEach(e => {
     const day = parseInt(e.date.slice(8,10)) - 1;
-    dayTotals[day] += parseFloat(e.amount);
+    dayTotals[day] += expTotal(e);
     dayCounts[day]++;
   });
   /* Use totals, not averages */
@@ -8791,7 +8891,7 @@ function renderCategoryGrowth(pool) {
   
   const cats = [...new Set(pool.map(e => e.category || 'Other'))];
   const catData = cats.map(c => {
-    const vals = monthKeys.map(mk => exps.filter(e => (e.category || 'Other') === c && e.date.slice(0, 7) === mk).reduce((s, e) => s + parseFloat(e.amount), 0));
+    const vals = monthKeys.map(mk => exps.filter(e => (e.category || 'Other') === c && e.date.slice(0, 7) === mk).reduce((s,e)=>s+expTotal(e), 0));
     const first = vals[0];
     const last = vals[vals.length - 1];
     const growth = first > 0 && last >= 0 ? Math.min(999, Math.max(-100, (last - first) / first * 100)) : (last > 0 ? 100 : 0);
