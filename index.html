@@ -2705,7 +2705,7 @@ function _drawSummary() {
   }
   /* Build catMap based on drill-down state */
   const catMap = {};
-  const subAvailable = pool.some(e => e.subcategory);
+  const subAvailable = pool.some(e => e.subcategory && String(e.subcategory).trim() !== '');
   /* Toggle visibility of drill button */
   const drillBtn = document.getElementById('cat-drill-toggle');
   if (drillBtn) drillBtn.style.display = subAvailable ? 'inline-flex' : 'none';
@@ -2782,15 +2782,11 @@ function _drawSummary() {
           let idx = -1;
           if (elements && elements.length > 0) {
             idx = elements[0].index;
-          } else if (chart && chart.$labelRects) {
-            /* Check if click landed on an external label rect */
-            const rect = chart.canvas.getBoundingClientRect();
-            const x = evt.native.clientX - rect.left;
-            const y = evt.native.clientY - rect.top;
+          } else if (chart && chart.$labelRects && evt.x !== undefined) {
+            /* Chart.js provides evt.x, evt.y in canvas coords */
             for (const r of chart.$labelRects) {
-              if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
-                idx = r.sliceIdx;
-                break;
+              if (evt.x >= r.x && evt.x <= r.x + r.w && evt.y >= r.y && evt.y <= r.y + r.h) {
+                idx = r.sliceIdx; break;
               }
             }
           }
@@ -2802,15 +2798,12 @@ function _drawSummary() {
         },
         onHover: (evt, elements, chart) => {
           let onTarget = elements.length > 0;
-          if (!onTarget && chart && chart.$labelRects) {
-            const rect = chart.canvas.getBoundingClientRect();
-            const x = evt.native.clientX - rect.left;
-            const y = evt.native.clientY - rect.top;
+          if (!onTarget && chart && chart.$labelRects && evt.x !== undefined) {
             for (const r of chart.$labelRects) {
-              if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { onTarget = true; break; }
+              if (evt.x >= r.x && evt.x <= r.x + r.w && evt.y >= r.y && evt.y <= r.y + r.h) { onTarget = true; break; }
             }
           }
-          evt.native.target.style.cursor = onTarget ? 'pointer' : 'default';
+          if (evt.native && evt.native.target) evt.native.target.style.cursor = onTarget ? 'pointer' : 'default';
         },
         plugins: {
           legend: { display: false },
@@ -2945,17 +2938,21 @@ function _drawSummary() {
               if (xEnd < minX) xEnd = minX;
             }
             
-            /* Leader line: slice edge → bend → label */
+            /* L-shape leader: slice → short radial outward → bend → horizontal to label.
+               The bend point is OUTSIDE the pie radius, so the line never crosses the pie. */
             const xStart = s.cx + Math.cos(s.angle) * s.radius;
             const yStart = s.cy + Math.sin(s.angle) * s.radius;
-            const xMid = s.cx + Math.cos(s.angle) * (s.radius + 8);
-            const yMid = s.cy + Math.sin(s.angle) * (s.radius + 8);
+            /* Bend at fixed distance outside pie (regardless of label y position) */
+            const bendOutDist = 14;
+            const xBend = s.cx + Math.cos(s.angle) * (s.radius + bendOutDist);
+            const yBend = s.cy + Math.sin(s.angle) * (s.radius + bendOutDist);
             
             ctx.strokeStyle = s.color;
             ctx.globalAlpha = 0.65;
             ctx.beginPath();
             ctx.moveTo(xStart, yStart);
-            ctx.lineTo(xMid, yMid);
+            ctx.lineTo(xBend, yBend);
+            /* From bend point, go horizontally to label's y (might rise or fall) */
             ctx.lineTo(xEnd, yAdj);
             ctx.stroke();
             
@@ -3390,8 +3387,24 @@ function showCategoryDrilldown(categoryName, pool) {
   const existing = document.getElementById('cat-drilldown-sheet');
   if (existing) existing.remove();
   
-  /* Filter pool to this category */
-  const items = (pool || exps).filter(e => (e.category || 'Other') === categoryName);
+  /* Handle "Parent › Sub" composite keys from sub-category view */
+  let parentCat = categoryName;
+  let subFilter = null;
+  if (categoryName.includes(' › ')) {
+    const parts = categoryName.split(' › ');
+    parentCat = parts[0];
+    const subPart = parts[1];
+    subFilter = (subPart === '(no sub)' || subPart === '(no sub-category)') ? '' : subPart;
+  }
+  
+  /* Filter pool to this category (and sub if applicable) */
+  const items = (pool || exps).filter(e => {
+    if ((e.category || 'Other') !== parentCat) return false;
+    if (subFilter === null) return true;  /* no sub filter, all items in parent */
+    const eSub = (e.subcategory || '').trim();
+    return eSub === subFilter;
+  });
+  
   if (items.length === 0) {
     showToast('No expenses in ' + categoryName);
     return;
@@ -8486,14 +8499,10 @@ function renderPaymentDonut(pool) {
         let idx = -1;
         if (elements && elements.length > 0) {
           idx = elements[0].index;
-        } else if (chart && chart.$labelRects) {
-          const rect = chart.canvas.getBoundingClientRect();
-          const x = evt.native.clientX - rect.left;
-          const y = evt.native.clientY - rect.top;
+        } else if (chart && chart.$labelRects && evt.x !== undefined) {
           for (const r of chart.$labelRects) {
-            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
-              idx = r.sliceIdx;
-              break;
+            if (evt.x >= r.x && evt.x <= r.x + r.w && evt.y >= r.y && evt.y <= r.y + r.h) {
+              idx = r.sliceIdx; break;
             }
           }
         }
@@ -8505,15 +8514,12 @@ function renderPaymentDonut(pool) {
       },
       onHover: (evt, elements, chart) => {
         let onTarget = elements.length > 0;
-        if (!onTarget && chart && chart.$labelRects) {
-          const rect = chart.canvas.getBoundingClientRect();
-          const x = evt.native.clientX - rect.left;
-          const y = evt.native.clientY - rect.top;
+        if (!onTarget && chart && chart.$labelRects && evt.x !== undefined) {
           for (const r of chart.$labelRects) {
-            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { onTarget = true; break; }
+            if (evt.x >= r.x && evt.x <= r.x + r.w && evt.y >= r.y && evt.y <= r.y + r.h) { onTarget = true; break; }
           }
         }
-        evt.native.target.style.cursor = onTarget ? 'pointer' : 'default';
+        if (evt.native && evt.native.target) evt.native.target.style.cursor = onTarget ? 'pointer' : 'default';
       },
       plugins: {
         legend: { display: false },
@@ -8632,14 +8638,15 @@ function renderPaymentDonut(pool) {
           
           const xStart = s.cx + Math.cos(s.angle) * s.radius;
           const yStart = s.cy + Math.sin(s.angle) * s.radius;
-          const xMid = s.cx + Math.cos(s.angle) * (s.radius + 8);
-          const yMid = s.cy + Math.sin(s.angle) * (s.radius + 8);
+          const bendOutDist = 14;
+          const xBend = s.cx + Math.cos(s.angle) * (s.radius + bendOutDist);
+          const yBend = s.cy + Math.sin(s.angle) * (s.radius + bendOutDist);
           
           ctx.strokeStyle = s.color;
           ctx.globalAlpha = 0.65;
           ctx.beginPath();
           ctx.moveTo(xStart, yStart);
-          ctx.lineTo(xMid, yMid);
+          ctx.lineTo(xBend, yBend);
           ctx.lineTo(xEnd, yAdj);
           ctx.stroke();
           
