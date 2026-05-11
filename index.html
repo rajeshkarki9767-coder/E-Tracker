@@ -2711,11 +2711,12 @@ function _drawSummary() {
   if (drillBtn) drillBtn.style.display = subAvailable ? 'inline-flex' : 'none';
   
   if (_catDrillDown && subAvailable) {
-    /* Sub-category view: show "Parent > Sub" or "Parent (no sub)" */
+    /* Sub-category view: show "Parent > Sub", or "Parent › (uncategorized)" for parent-only expenses */
     pool.forEach(e => {
       const cat = e.category || 'Other';
       const sub = e.subcategory || '';
-      const key = sub ? cat + ' › ' + sub : cat;
+      /* Always include the parent name so the breakdown is clearly different from parent view */
+      const key = sub ? cat + ' › ' + sub : cat + ' › (no sub)';
       catMap[key] = (catMap[key] || 0) + parseFloat(e.amount);
     });
   } else {
@@ -2775,7 +2776,7 @@ function _drawSummary() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 40, bottom: 40, left: 60, right: 60 } },
+        layout: { padding: { top: 30, bottom: 30, left: 95, right: 95 } },
         /* Tap a slice -> open category drill-down (handles short labels too) */
         onClick: (evt, elements) => {
           if (!elements || elements.length === 0) return;
@@ -2841,34 +2842,134 @@ function _drawSummary() {
         }
       },
       plugins: typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels, {
-        /* Custom plugin to draw leader lines */
-        id: 'leaderLines',
+        /* Custom plugin: leader lines for big slices + external positioned labels for small slices */
+        id: 'leaderLinesAndSmallLabels',
         afterDatasetsDraw: (chart) => {
           const ctx = chart.ctx;
           const meta = chart.getDatasetMeta(0);
+          const dataset = chart.data.datasets[0];
+          const labels = chart.data.labels;
+          
           ctx.save();
+          
+          /* Step 1: short leader lines for BIG slices (>= 5%) — their labels are on-slice */
           ctx.strokeStyle = labelColor;
           ctx.globalAlpha = isDark ? 0.7 : 0.4;
           ctx.lineWidth = 1;
-          
           meta.data.forEach((arc, i) => {
-            const value = chart.data.datasets[0].data[i];
-            if ((value / totalSum) <= 0.05) return;  /* match label threshold */
-            
+            const value = dataset.data[i];
+            if ((value / totalSum) <= 0.05) return;
             const angle = (arc.startAngle + arc.endAngle) / 2;
             const radius = arc.outerRadius;
-            const cx = arc.x;
-            const cy = arc.y;
-            
+            const cx = arc.x, cy = arc.y;
             const x1 = cx + Math.cos(angle) * radius;
             const y1 = cy + Math.sin(angle) * radius;
             const x2 = cx + Math.cos(angle) * (radius + 8);
             const y2 = cy + Math.sin(angle) * (radius + 8);
-            
             ctx.beginPath();
             ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
             ctx.stroke();
+          });
+          
+          /* Step 2: external labels for SMALL slices (< 5%) — with anti-overlap stacking */
+          /* Collect small slices */
+          const smallSlices = [];
+          meta.data.forEach((arc, i) => {
+            const value = dataset.data[i];
+            const ratio = value / totalSum;
+            if (ratio <= 0 || ratio >= 0.05) return;
+            const angle = (arc.startAngle + arc.endAngle) / 2;
+            smallSlices.push({
+              i, arc, value, ratio,
+              angle,
+              cx: arc.x, cy: arc.y,
+              radius: arc.outerRadius,
+              label: labels[i],
+              isRight: Math.cos(angle) >= 0
+            });
+          });
+          
+          if (smallSlices.length === 0) {
+            ctx.restore();
+            return;
+          }
+          
+          /* Sort by vertical position so we can stack them without overlap */
+          smallSlices.forEach(s => {
+            s.yRaw = s.cy + Math.sin(s.angle) * (s.radius + 18);
+          });
+          
+          /* Group by side (left/right) and stack vertically */
+          const rightSlices = smallSlices.filter(s => s.isRight).sort((a, b) => a.yRaw - b.yRaw);
+          const leftSlices  = smallSlices.filter(s => !s.isRight).sort((a, b) => a.yRaw - b.yRaw);
+          
+          /* Min vertical gap between stacked labels */
+          const labelHeight = 14;
+          
+          /* Resolve overlaps by pushing labels apart */
+          function resolveStack(list) {
+            for (let i = 1; i < list.length; i++) {
+              const prev = list[i - 1];
+              const cur = list[i];
+              const minY = prev.y + labelHeight;
+              if (cur.yRaw < minY) {
+                cur.y = minY;
+              } else {
+                cur.y = cur.yRaw;
+              }
+            }
+            if (list.length > 0) list[0].y = list[0].yRaw;
+          }
+          resolveStack(rightSlices);
+          resolveStack(leftSlices);
+          
+          /* Draw labels + leader lines */
+          ctx.font = "bold 10px 'DM Sans', sans-serif";
+          ctx.fillStyle = labelColor;
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = labelColor;
+          
+          smallSlices.concat([]).forEach(s => {
+            const yAdj = s.y !== undefined ? s.y : s.yRaw;
+            /* Outer label position — slightly outside the pie */
+            const pad = 14;
+            const xEnd = s.cx + (s.isRight ? 1 : -1) * (s.radius + 22);
+            const yEnd = yAdj;
+            
+            /* Inner leader-line start: on slice edge at slice midangle */
+            const xStart = s.cx + Math.cos(s.angle) * s.radius;
+            const yStart = s.cy + Math.sin(s.angle) * s.radius;
+            
+            /* Mid bend point */
+            const xMid = s.cx + Math.cos(s.angle) * (s.radius + 10);
+            const yMid = s.cy + Math.sin(s.angle) * (s.radius + 10);
+            
+            /* Draw leader: slice → mid → horizontal to label */
+            ctx.globalAlpha = isDark ? 0.6 : 0.45;
+            ctx.beginPath();
+            ctx.moveTo(xStart, yStart);
+            ctx.lineTo(xMid, yMid);
+            ctx.lineTo(xEnd, yEnd);
+            ctx.stroke();
+            
+            /* Label text */
+            ctx.globalAlpha = 1;
+            const pct = (s.ratio * 100).toFixed(1);
+            const icon = (cfg.catIcons && cfg.catIcons[s.label]) ? cfg.catIcons[s.label] + ' ' : '';
+            /* Truncate long names */
+            let nm = s.label;
+            if (nm.length > 10) {
+              const sp = nm.indexOf(' ');
+              nm = (sp > 0 && sp <= 10) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 9) + '\u2026';
+            }
+            const text = icon + nm + ' ' + pct + '%';
+            
+            ctx.textAlign = s.isRight ? 'left' : 'right';
+            ctx.textBaseline = 'middle';
+            const xText = xEnd + (s.isRight ? 3 : -3);
+            ctx.fillText(text, xText, yEnd);
           });
           
           ctx.restore();
@@ -8365,7 +8466,7 @@ function renderPaymentDonut(pool) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      layout: { padding: { top: 40, bottom: 40, left: 60, right: 60 } },
+      layout: { padding: { top: 30, bottom: 30, left: 95, right: 95 } },
       /* Tap a slice -> open payment drill-down */
       onClick: (evt, elements) => {
         if (!elements || elements.length === 0) return;
@@ -8430,35 +8531,103 @@ function renderPaymentDonut(pool) {
       }
     },
     plugins: typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels, {
-      /* Leader lines plugin */
-      id: 'pmtLeaderLines',
+      /* Leader lines + external labels for small slices */
+      id: 'pmtLeaderLinesAndSmallLabels',
       afterDatasetsDraw: (chart) => {
         const ctx = chart.ctx;
         const meta = chart.getDatasetMeta(0);
+        const dataset = chart.data.datasets[0];
+        const labels = chart.data.labels;
         ctx.save();
+        
+        /* Big slices: short leader lines */
         ctx.strokeStyle = labelColor;
-        ctx.globalAlpha = 0.4;
+        ctx.globalAlpha = isDark ? 0.6 : 0.4;
         ctx.lineWidth = 1;
-
         meta.data.forEach((arc, i) => {
-          const value = chart.data.datasets[0].data[i];
-          if ((value / totalSum) <= 0.05) return;  /* match label threshold */
-
+          const value = dataset.data[i];
+          if ((value / totalSum) <= 0.05) return;
           const angle = (arc.startAngle + arc.endAngle) / 2;
           const radius = arc.outerRadius;
-          const cx = arc.x;
-          const cy = arc.y;
-
+          const cx = arc.x, cy = arc.y;
           const x1 = cx + Math.cos(angle) * radius;
           const y1 = cy + Math.sin(angle) * radius;
           const x2 = cx + Math.cos(angle) * (radius + 8);
           const y2 = cy + Math.sin(angle) * (radius + 8);
-
           ctx.beginPath();
           ctx.moveTo(x1, y1);
           ctx.lineTo(x2, y2);
           ctx.stroke();
         });
+        
+        /* Small slices: external labels with leader lines */
+        const smallSlices = [];
+        meta.data.forEach((arc, i) => {
+          const value = dataset.data[i];
+          const ratio = value / totalSum;
+          if (ratio <= 0 || ratio >= 0.05) return;
+          const angle = (arc.startAngle + arc.endAngle) / 2;
+          smallSlices.push({
+            i, arc, value, ratio, angle,
+            cx: arc.x, cy: arc.y, radius: arc.outerRadius,
+            label: labels[i],
+            isRight: Math.cos(angle) >= 0,
+            yRaw: arc.y + Math.sin(angle) * (arc.outerRadius + 18)
+          });
+        });
+        
+        if (smallSlices.length === 0) { ctx.restore(); return; }
+        
+        const rightSlices = smallSlices.filter(s => s.isRight).sort((a,b) => a.yRaw - b.yRaw);
+        const leftSlices  = smallSlices.filter(s => !s.isRight).sort((a,b) => a.yRaw - b.yRaw);
+        const labelHeight = 14;
+        function resolveStack(list) {
+          if (list.length === 0) return;
+          list[0].y = list[0].yRaw;
+          for (let i = 1; i < list.length; i++) {
+            const prev = list[i - 1], cur = list[i];
+            cur.y = Math.max(cur.yRaw, prev.y + labelHeight);
+          }
+        }
+        resolveStack(rightSlices);
+        resolveStack(leftSlices);
+        
+        ctx.font = "bold 10px 'DM Sans', sans-serif";
+        ctx.fillStyle = labelColor;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = labelColor;
+        
+        smallSlices.forEach(s => {
+          const yAdj = s.y !== undefined ? s.y : s.yRaw;
+          const xEnd = s.cx + (s.isRight ? 1 : -1) * (s.radius + 22);
+          const xStart = s.cx + Math.cos(s.angle) * s.radius;
+          const yStart = s.cy + Math.sin(s.angle) * s.radius;
+          const xMid = s.cx + Math.cos(s.angle) * (s.radius + 10);
+          const yMid = s.cy + Math.sin(s.angle) * (s.radius + 10);
+          
+          ctx.globalAlpha = isDark ? 0.6 : 0.45;
+          ctx.beginPath();
+          ctx.moveTo(xStart, yStart);
+          ctx.lineTo(xMid, yMid);
+          ctx.lineTo(xEnd, yAdj);
+          ctx.stroke();
+          
+          ctx.globalAlpha = 1;
+          const pct = (s.ratio * 100).toFixed(1);
+          const icon = ((cfg.pmtIcons && cfg.pmtIcons[s.label]) || (typeof PMT_ICONS !== 'undefined' && PMT_ICONS[s.label]) || '');
+          let nm = s.label;
+          if (nm.length > 10) {
+            const sp = nm.indexOf(' ');
+            nm = (sp > 0 && sp <= 10) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 9) + '\u2026';
+          }
+          const text = (icon ? icon + ' ' : '') + nm + ' ' + pct + '%';
+          
+          ctx.textAlign = s.isRight ? 'left' : 'right';
+          ctx.textBaseline = 'middle';
+          const xText = xEnd + (s.isRight ? 3 : -3);
+          ctx.fillText(text, xText, yAdj);
+        });
+        
         ctx.restore();
       }
     }] : []
