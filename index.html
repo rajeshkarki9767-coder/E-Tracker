@@ -2834,7 +2834,8 @@ function _drawSummary() {
             textAlign: 'center',
             display: (ctx) => {
               const value = ctx.dataset.data[ctx.dataIndex];
-              return (value / totalSum) > 0.005;  /* hide labels for slices < 0.5% */
+              /* Hide labels on small slices to prevent overlap — legend below shows them */
+              return (value / totalSum) > 0.05;  /* show labels only for slices >= 5% */
             }
           } : false
         }
@@ -2852,7 +2853,7 @@ function _drawSummary() {
           
           meta.data.forEach((arc, i) => {
             const value = chart.data.datasets[0].data[i];
-            if ((value / totalSum) <= 0.005) return;
+            if ((value / totalSum) <= 0.05) return;  /* match label threshold */
             
             const angle = (arc.startAngle + arc.endAngle) / 2;
             const radius = arc.outerRadius;
@@ -8419,7 +8420,12 @@ function renderPaymentDonut(pool) {
             }
             return iconStr + truncated + '\n' + pct + '%';
           },
-          textAlign: 'center'
+          textAlign: 'center',
+          display: (ctx) => {
+            const value = ctx.dataset.data[ctx.dataIndex];
+            /* Hide labels on small slices to prevent overlap */
+            return (value / totalSum) > 0.05;
+          }
         } : false
       }
     },
@@ -8436,7 +8442,7 @@ function renderPaymentDonut(pool) {
 
         meta.data.forEach((arc, i) => {
           const value = chart.data.datasets[0].data[i];
-          if ((value / totalSum) <= 0.005) return;
+          if ((value / totalSum) <= 0.05) return;  /* match label threshold */
 
           const angle = (arc.startAngle + arc.endAngle) / 2;
           const radius = arc.outerRadius;
