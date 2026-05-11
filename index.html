@@ -2854,23 +2854,28 @@ function _drawSummary() {
           const radSlice = slices[0].radius;
           const maxLabelsPerSide = Math.max(3, Math.floor((radSlice * 2 + 60) / labelGap));
           
+          /* Force balance: target equal-ish split. If one side is much fuller than the other, move slices over. */
           function rebalance(over, under) {
-            /* Move labels from "over" (overcrowded) to "under" until counts equalize */
-            /* Pick the ones closest to vertical center (angle near ±π/2) — they're least anchored to a side */
-            while (over.length > maxLabelsPerSide && over.length - under.length >= 2) {
-              const sorted = over.slice().sort((a, b) =>
-                Math.abs(Math.cos(b.angle)) - Math.abs(Math.cos(a.angle))
-              );
-              /* The slice whose cos is smallest in magnitude can move sides easily */
-              const moveMe = sorted[sorted.length - 1];
+            /* Move until sides are within 1 of each other */
+            while (over.length - under.length >= 2) {
+              /* Pick the slice in `over` whose angle is closest to vertical (top or bottom)
+                 — those slices can move sides without their leader line looking weird */
+              let bestIdx = -1, bestScore = -1;
+              for (let i = 0; i < over.length; i++) {
+                const a = over[i].angle;
+                /* Score = how close to ±π/2 (top or bottom). |cos(angle)| near 0 means vertical. */
+                const score = 1 - Math.abs(Math.cos(a));
+                if (score > bestScore) { bestScore = score; bestIdx = i; }
+              }
+              if (bestIdx === -1) break;
+              const moveMe = over[bestIdx];
               moveMe.isRight = !moveMe.isRight;
-              const idx = over.indexOf(moveMe);
-              over.splice(idx, 1);
+              over.splice(bestIdx, 1);
               under.push(moveMe);
             }
           }
           if (rightSlices.length > leftSlices.length) rebalance(rightSlices, leftSlices);
-          else rebalance(leftSlices, rightSlices);
+          else if (leftSlices.length > rightSlices.length) rebalance(leftSlices, rightSlices);
           
           /* Sort each side by vertical position */
           rightSlices.sort((a,b) => a.yRaw - b.yRaw);
@@ -8537,19 +8542,21 @@ function renderPaymentDonut(pool) {
         const maxLabelsPerSide = Math.max(3, Math.floor((radSlice * 2 + 60) / labelGap));
         
         function rebalance(over, under) {
-          while (over.length > maxLabelsPerSide && over.length - under.length >= 2) {
-            const sorted = over.slice().sort((a, b) =>
-              Math.abs(Math.cos(b.angle)) - Math.abs(Math.cos(a.angle))
-            );
-            const moveMe = sorted[sorted.length - 1];
+          while (over.length - under.length >= 2) {
+            let bestIdx = -1, bestScore = -1;
+            for (let i = 0; i < over.length; i++) {
+              const score = 1 - Math.abs(Math.cos(over[i].angle));
+              if (score > bestScore) { bestScore = score; bestIdx = i; }
+            }
+            if (bestIdx === -1) break;
+            const moveMe = over[bestIdx];
             moveMe.isRight = !moveMe.isRight;
-            const idx = over.indexOf(moveMe);
-            over.splice(idx, 1);
+            over.splice(bestIdx, 1);
             under.push(moveMe);
           }
         }
         if (rightSlices.length > leftSlices.length) rebalance(rightSlices, leftSlices);
-        else rebalance(leftSlices, rightSlices);
+        else if (leftSlices.length > rightSlices.length) rebalance(leftSlices, rightSlices);
         
         rightSlices.sort((a,b) => a.yRaw - b.yRaw);
         leftSlices.sort((a,b) => a.yRaw - b.yRaw);
