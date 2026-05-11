@@ -1,5 +1,5 @@
 // E Tracker Service Worker v8 — bumped for security hardening rollout
-const CACHE = 'et-v8';
+const CACHE = 'et-v9';
 const STATIC = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
