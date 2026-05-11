@@ -2778,17 +2778,39 @@ function _drawSummary() {
         maintainAspectRatio: false,
         layout: { padding: { top: 30, bottom: 30, left: 95, right: 95 } },
         /* Tap a slice -> open category drill-down (handles short labels too) */
-        onClick: (evt, elements) => {
-          if (!elements || elements.length === 0) return;
-          const idx = elements[0].index;
+        onClick: (evt, elements, chart) => {
+          let idx = -1;
+          if (elements && elements.length > 0) {
+            idx = elements[0].index;
+          } else if (chart && chart.$labelRects) {
+            /* Check if click landed on an external label rect */
+            const rect = chart.canvas.getBoundingClientRect();
+            const x = evt.native.clientX - rect.left;
+            const y = evt.native.clientY - rect.top;
+            for (const r of chart.$labelRects) {
+              if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+                idx = r.sliceIdx;
+                break;
+              }
+            }
+          }
+          if (idx < 0) return;
           const fullCategoryName = pieData[idx][0];
           if (typeof showCategoryDrilldown === 'function') {
             showCategoryDrilldown(fullCategoryName, pool);
           }
         },
-        onHover: (evt, elements) => {
-          /* Cursor pointer on hover */
-          evt.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+        onHover: (evt, elements, chart) => {
+          let onTarget = elements.length > 0;
+          if (!onTarget && chart && chart.$labelRects) {
+            const rect = chart.canvas.getBoundingClientRect();
+            const x = evt.native.clientX - rect.left;
+            const y = evt.native.clientY - rect.top;
+            for (const r of chart.$labelRects) {
+              if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { onTarget = true; break; }
+            }
+          }
+          evt.native.target.style.cursor = onTarget ? 'pointer' : 'default';
         },
         plugins: {
           legend: { display: false },
@@ -2843,39 +2865,10 @@ function _drawSummary() {
           });
           if (slices.length === 0) return;
           
-          /* === Side rebalancing ===
-             If one side has too many labels relative to the other, move some
-             over to balance. Each side can fit ~floor(canvasH / labelGap) labels.
-             When 6+ are stuck on one side, push the worst (most-extreme angle) ones over. */
-          let rightSlices = slices.filter(s => s.isRight);
-          let leftSlices  = slices.filter(s => !s.isRight);
+          /* Group by natural geometric side — no rebalancing, so leader lines never cross the pie */
+          const rightSlices = slices.filter(s => s.isRight);
+          const leftSlices  = slices.filter(s => !s.isRight);
           const labelGap = 26;
-          const cySlice = slices[0].cy;
-          const radSlice = slices[0].radius;
-          const maxLabelsPerSide = Math.max(3, Math.floor((radSlice * 2 + 60) / labelGap));
-          
-          /* Force balance: target equal-ish split. If one side is much fuller than the other, move slices over. */
-          function rebalance(over, under) {
-            /* Move until sides are within 1 of each other */
-            while (over.length - under.length >= 2) {
-              /* Pick the slice in `over` whose angle is closest to vertical (top or bottom)
-                 — those slices can move sides without their leader line looking weird */
-              let bestIdx = -1, bestScore = -1;
-              for (let i = 0; i < over.length; i++) {
-                const a = over[i].angle;
-                /* Score = how close to ±π/2 (top or bottom). |cos(angle)| near 0 means vertical. */
-                const score = 1 - Math.abs(Math.cos(a));
-                if (score > bestScore) { bestScore = score; bestIdx = i; }
-              }
-              if (bestIdx === -1) break;
-              const moveMe = over[bestIdx];
-              moveMe.isRight = !moveMe.isRight;
-              over.splice(bestIdx, 1);
-              under.push(moveMe);
-            }
-          }
-          if (rightSlices.length > leftSlices.length) rebalance(rightSlices, leftSlices);
-          else if (leftSlices.length > rightSlices.length) rebalance(leftSlices, rightSlices);
           
           /* Sort each side by vertical position */
           rightSlices.sort((a,b) => a.yRaw - b.yRaw);
@@ -2925,6 +2918,9 @@ function _drawSummary() {
           
           ctx.lineWidth = 1;
           ctx.textBaseline = 'middle';
+          
+          /* Store rects for click detection */
+          chart.$labelRects = [];
           
           [...rightSlices, ...leftSlices].forEach(s => {
             const yAdj = s.y;
@@ -2976,6 +2972,18 @@ function _drawSummary() {
             ctx.font = "500 10px 'DM Sans', sans-serif";
             ctx.fillStyle = isDark ? '#a0a0a8' : '#666';
             ctx.fillText(pct, xText, yAdj + 7);
+            
+            /* Save tappable rect spanning label area */
+            const rectPad = 8;
+            const rectW = Math.max(lblW + 20, 60);
+            const rectX = s.isRight ? xText - 4 : xText - rectW + 4;
+            chart.$labelRects.push({
+              x: rectX - rectPad,
+              y: yAdj - 14,
+              w: rectW + rectPad * 2,
+              h: 28,
+              sliceIdx: s.i
+            });
           });
           
           ctx.restore();
@@ -8474,16 +8482,38 @@ function renderPaymentDonut(pool) {
       maintainAspectRatio: false,
       layout: { padding: { top: 30, bottom: 30, left: 95, right: 95 } },
       /* Tap a slice -> open payment drill-down */
-      onClick: (evt, elements) => {
-        if (!elements || elements.length === 0) return;
-        const idx = elements[0].index;
+      onClick: (evt, elements, chart) => {
+        let idx = -1;
+        if (elements && elements.length > 0) {
+          idx = elements[0].index;
+        } else if (chart && chart.$labelRects) {
+          const rect = chart.canvas.getBoundingClientRect();
+          const x = evt.native.clientX - rect.left;
+          const y = evt.native.clientY - rect.top;
+          for (const r of chart.$labelRects) {
+            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+              idx = r.sliceIdx;
+              break;
+            }
+          }
+        }
+        if (idx < 0) return;
         const fullPaymentName = pieData[idx][0];
         if (typeof showPaymentDrilldown === 'function') {
           showPaymentDrilldown(fullPaymentName, pool);
         }
       },
-      onHover: (evt, elements) => {
-        evt.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      onHover: (evt, elements, chart) => {
+        let onTarget = elements.length > 0;
+        if (!onTarget && chart && chart.$labelRects) {
+          const rect = chart.canvas.getBoundingClientRect();
+          const x = evt.native.clientX - rect.left;
+          const y = evt.native.clientY - rect.top;
+          for (const r of chart.$labelRects) {
+            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { onTarget = true; break; }
+          }
+        }
+        evt.native.target.style.cursor = onTarget ? 'pointer' : 'default';
       },
       plugins: {
         legend: { display: false },
@@ -8535,28 +8565,10 @@ function renderPaymentDonut(pool) {
         });
         if (slices.length === 0) return;
         
-        let rightSlices = slices.filter(s => s.isRight);
-        let leftSlices  = slices.filter(s => !s.isRight);
+        const rightSlices = slices.filter(s => s.isRight);
+        const leftSlices  = slices.filter(s => !s.isRight);
         const labelGap = 26;
-        const radSlice = slices[0].radius;
-        const maxLabelsPerSide = Math.max(3, Math.floor((radSlice * 2 + 60) / labelGap));
-        
-        function rebalance(over, under) {
-          while (over.length - under.length >= 2) {
-            let bestIdx = -1, bestScore = -1;
-            for (let i = 0; i < over.length; i++) {
-              const score = 1 - Math.abs(Math.cos(over[i].angle));
-              if (score > bestScore) { bestScore = score; bestIdx = i; }
-            }
-            if (bestIdx === -1) break;
-            const moveMe = over[bestIdx];
-            moveMe.isRight = !moveMe.isRight;
-            over.splice(bestIdx, 1);
-            under.push(moveMe);
-          }
-        }
-        if (rightSlices.length > leftSlices.length) rebalance(rightSlices, leftSlices);
-        else if (leftSlices.length > rightSlices.length) rebalance(leftSlices, rightSlices);
+        chart.$labelRects = [];
         
         rightSlices.sort((a,b) => a.yRaw - b.yRaw);
         leftSlices.sort((a,b) => a.yRaw - b.yRaw);
@@ -8643,6 +8655,18 @@ function renderPaymentDonut(pool) {
           ctx.font = "500 10px 'DM Sans', sans-serif";
           ctx.fillStyle = isDark ? '#a0a0a8' : '#666';
           ctx.fillText(pct, xText, yAdj + 7);
+          
+          /* Save tappable rect */
+          const rectPad = 8;
+          const rectW = Math.max(lblW + 20, 60);
+          const rectX = s.isRight ? xText - 4 : xText - rectW + 4;
+          chart.$labelRects.push({
+            x: rectX - rectPad,
+            y: yAdj - 14,
+            w: rectW + rectPad * 2,
+            h: 28,
+            sliceIdx: s.i
+          });
         });
         
         ctx.restore();
