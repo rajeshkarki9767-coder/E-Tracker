@@ -633,19 +633,16 @@ html.theme-light{
     <div class="chart-card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:10px">
         <span class="chart-card-title" id="sum-cat-title" style="margin-bottom:0">By category</span>
-        <button id="cat-drill-toggle" style="background:var(--surf2);border:0.5px solid var(--brd2);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--text2);cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:5px;flex-shrink:0;display:none">
-          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-          <span id="cat-drill-label">Show subs</span>
-        </button>
+
       </div>
-      <div id="cat-pie-wrap" style="position:relative;height:420px;margin-bottom:18px;display:none;background:transparent">
+      <div id="cat-pie-wrap" style="position:relative;height:460px;margin-bottom:18px;display:none;background:transparent">
         <canvas id="cat-pie-chart"></canvas>
       </div>
       <div id="cat-bars"></div>
     </div>
     <div class="chart-card">
       <div class="chart-card-title" id="sum-pmt-donut-title">By Payment</div>
-      <div style="position:relative;height:380px;margin-bottom:14px;background:transparent">
+      <div style="position:relative;height:420px;margin-bottom:14px;background:transparent">
         <canvas id="pmtDonut"></canvas>
       </div>
       <div id="donut-legend"></div>
@@ -1743,7 +1740,6 @@ let _prevExpCount = exps.length;
 let loans = (() => { try { return JSON.parse(localStorage.getItem('et_loans') || '[]'); } catch(e) { console.warn('Corrupt loans, resetting'); try{localStorage.removeItem('et_loans');}catch(_){} return []; } })();
 let _loanFilter = 'active';
 let _expandedLoanGroups = new Set();
-let _catDrillDown = false; /* false = parent view, true = sub-category view */
 
 /* ── REAL-TIME SYNC ── */
 (function(){
@@ -2564,21 +2560,7 @@ function buildDateRangeBar(containerId, rangeObj, presets, onApply) {
 /* ─── SUMMARY ─── */
 function renderSummary() {
   if(typeof Chart === 'undefined') { loadChartJs().then(renderSummary); return; }
-  /* Wire up drill toggle once */
-  const drillBtn = document.getElementById('cat-drill-toggle');
-  if (drillBtn && !drillBtn.dataset.bound) {
-    drillBtn.dataset.bound = '1';
-    drillBtn.addEventListener('click', () => {
-      haptic(6);
-      _catDrillDown = !_catDrillDown;
-      const lbl = document.getElementById('cat-drill-label');
-      if (lbl) lbl.textContent = _catDrillDown ? 'Show parents' : 'Show subs';
-      drillBtn.style.background = _catDrillDown ? 'var(--acc-l)' : 'var(--surf2)';
-      drillBtn.style.color = _catDrillDown ? 'var(--acc)' : 'var(--text2)';
-      drillBtn.style.borderColor = _catDrillDown ? 'var(--acc)' : 'var(--brd2)';
-      renderSummary();
-    });
-  }
+
   if (!sumRange.from && !sumRange.to && sumRange.preset !== 'all') {
     const r = presetRange('month'); sumRange.from = r.from; sumRange.to = r.to;
   }
@@ -2705,24 +2687,9 @@ function _drawSummary() {
   }
   /* Build catMap based on drill-down state */
   const catMap = {};
-  const subAvailable = pool.some(e => e.subcategory && String(e.subcategory).trim() !== '');
-  /* Toggle visibility of drill button */
-  const drillBtn = document.getElementById('cat-drill-toggle');
-  if (drillBtn) drillBtn.style.display = subAvailable ? 'inline-flex' : 'none';
-  
-  if (_catDrillDown && subAvailable) {
-    /* Sub-category view: show "Parent > Sub", or "Parent › (uncategorized)" for parent-only expenses */
-    pool.forEach(e => {
-      const cat = e.category || 'Other';
-      const sub = e.subcategory || '';
-      /* Always include the parent name so the breakdown is clearly different from parent view */
-      const key = sub ? cat + ' › ' + sub : cat + ' › (no sub)';
-      catMap[key] = (catMap[key] || 0) + parseFloat(e.amount);
-    });
-  } else {
-    /* Parent view (default) */
-    pool.forEach(e => { const c = e.category || 'Other'; catMap[c] = (catMap[c]||0) + parseFloat(e.amount); });
-  }
+
+  /* Parent category aggregation */
+  pool.forEach(e => { const c = e.category || 'Other'; catMap[c] = (catMap[c]||0) + parseFloat(e.amount); });
   const topCat = Object.entries(catMap).sort((a,b)=>b[1]-a[1])[0];
   if (topCat) insights.push({type:'info', title:`Top category: ${topCat[0]}`, sub:`${fmt(Math.round(topCat[1]))} (${total>0?(topCat[1]/total*100).toFixed(0):0}% of total)`});
 
@@ -2746,9 +2713,9 @@ function _drawSummary() {
   if (pieWrap && pieCanvas && sorted.length > 0 && typeof Chart !== 'undefined') {
     pieWrap.style.display = 'block';
     if (chartInst.catPie) { chartInst.catPie.destroy(); chartInst.catPie = null; }
-    /* Group small slices into "Others" - keep top 7, group rest */
-    const top = sorted.slice(0, 7);
-    const rest = sorted.slice(7);
+    /* Show all categories on the pie */
+    const top = sorted.slice(0, 12);
+    const rest = sorted.slice(12);
     const restSum = rest.reduce((s,[,v]) => s+v, 0);
     const pieData = top.slice();
     if (restSum > 0) pieData.push(['Others', restSum]);
@@ -2776,7 +2743,7 @@ function _drawSummary() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 30, bottom: 30, left: 95, right: 95 } },
+        layout: { padding: { top: 40, bottom: 40, left: 100, right: 100 } },
         /* Tap a slice -> open category drill-down (handles short labels too) */
         onClick: (evt, elements, chart) => {
           let idx = -1;
@@ -2819,7 +2786,7 @@ function _drawSummary() {
               label: (ctx) => {
                 const v = ctx.parsed;
                 const pct = ((v / totalSum) * 100).toFixed(1);
-                return fmt(v) + ' (' + pct + '%) — tap to view details';
+                return fmt(v) + ' (' + pct + '%)';
               }
             }
           },
@@ -2938,22 +2905,21 @@ function _drawSummary() {
               if (xEnd < minX) xEnd = minX;
             }
             
-            /* L-shape leader: slice → short radial outward → bend → horizontal to label.
-               The bend point is OUTSIDE the pie radius, so the line never crosses the pie. */
+            /* Leader: slice edge → diagonal to bend column → horizontal to label.
+               All bend points sit on the same vertical column outside the pie.
+               This guarantees no two leaders on the same side ever cross — their
+               horizontal segments are at different y values, never intersecting. */
             const xStart = s.cx + Math.cos(s.angle) * s.radius;
             const yStart = s.cy + Math.sin(s.angle) * s.radius;
-            /* Bend at fixed distance outside pie (regardless of label y position) */
-            const bendOutDist = 14;
-            const xBend = s.cx + Math.cos(s.angle) * (s.radius + bendOutDist);
-            const yBend = s.cy + Math.sin(s.angle) * (s.radius + bendOutDist);
+            /* Vertical bend column: fixed x just outside pie on this side */
+            const bendCol = s.cx + (s.isRight ? 1 : -1) * (s.radius + 12);
             
             ctx.strokeStyle = s.color;
             ctx.globalAlpha = 0.65;
             ctx.beginPath();
             ctx.moveTo(xStart, yStart);
-            ctx.lineTo(xBend, yBend);
-            /* From bend point, go horizontally to label's y (might rise or fall) */
-            ctx.lineTo(xEnd, yAdj);
+            ctx.lineTo(bendCol, yAdj);  /* diagonal: slice → bend column at label's y */
+            ctx.lineTo(xEnd, yAdj);     /* horizontal: bend column → label */
             ctx.stroke();
             
             /* Labels */
@@ -8493,7 +8459,7 @@ function renderPaymentDonut(pool) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      layout: { padding: { top: 30, bottom: 30, left: 95, right: 95 } },
+      layout: { padding: { top: 40, bottom: 40, left: 100, right: 100 } },
       /* Tap a slice -> open payment drill-down */
       onClick: (evt, elements, chart) => {
         let idx = -1;
@@ -8535,7 +8501,7 @@ function renderPaymentDonut(pool) {
             label: (ctx) => {
               const v = ctx.parsed;
               const pct = ((v / totalSum) * 100).toFixed(1);
-              return fmt(v) + ' (' + pct + '%) — tap to view details';
+              return fmt(v) + ' (' + pct + '%)';
             }
           }
         },
@@ -8638,15 +8604,13 @@ function renderPaymentDonut(pool) {
           
           const xStart = s.cx + Math.cos(s.angle) * s.radius;
           const yStart = s.cy + Math.sin(s.angle) * s.radius;
-          const bendOutDist = 14;
-          const xBend = s.cx + Math.cos(s.angle) * (s.radius + bendOutDist);
-          const yBend = s.cy + Math.sin(s.angle) * (s.radius + bendOutDist);
+          const bendCol = s.cx + (s.isRight ? 1 : -1) * (s.radius + 12);
           
           ctx.strokeStyle = s.color;
           ctx.globalAlpha = 0.65;
           ctx.beginPath();
           ctx.moveTo(xStart, yStart);
-          ctx.lineTo(xBend, yBend);
+          ctx.lineTo(bendCol, yAdj);
           ctx.lineTo(xEnd, yAdj);
           ctx.stroke();
           
