@@ -2822,6 +2822,9 @@ function _drawSummary() {
           const dataset = chart.data.datasets[0];
           const labels = chart.data.labels;
           const colors = dataset.backgroundColor || [];
+          const chartArea = chart.chartArea;
+          const canvasW = chart.width;
+          const canvasH = chart.height;
           
           /* Collect all slices */
           const slices = [];
@@ -2840,53 +2843,113 @@ function _drawSummary() {
           });
           if (slices.length === 0) return;
           
-          /* Group by side, stack vertically with anti-overlap */
-          const rightSlices = slices.filter(s => s.isRight).sort((a,b) => a.yRaw - b.yRaw);
-          const leftSlices  = slices.filter(s => !s.isRight).sort((a,b) => a.yRaw - b.yRaw);
-          
-          /* Each label takes 26px (two lines: name + pct) */
+          /* === Side rebalancing ===
+             If one side has too many labels relative to the other, move some
+             over to balance. Each side can fit ~floor(canvasH / labelGap) labels.
+             When 6+ are stuck on one side, push the worst (most-extreme angle) ones over. */
+          let rightSlices = slices.filter(s => s.isRight);
+          let leftSlices  = slices.filter(s => !s.isRight);
           const labelGap = 26;
+          const cySlice = slices[0].cy;
+          const radSlice = slices[0].radius;
+          const maxLabelsPerSide = Math.max(3, Math.floor((radSlice * 2 + 60) / labelGap));
+          
+          function rebalance(over, under) {
+            /* Move labels from "over" (overcrowded) to "under" until counts equalize */
+            /* Pick the ones closest to vertical center (angle near ±π/2) — they're least anchored to a side */
+            while (over.length > maxLabelsPerSide && over.length - under.length >= 2) {
+              const sorted = over.slice().sort((a, b) =>
+                Math.abs(Math.cos(b.angle)) - Math.abs(Math.cos(a.angle))
+              );
+              /* The slice whose cos is smallest in magnitude can move sides easily */
+              const moveMe = sorted[sorted.length - 1];
+              moveMe.isRight = !moveMe.isRight;
+              const idx = over.indexOf(moveMe);
+              over.splice(idx, 1);
+              under.push(moveMe);
+            }
+          }
+          if (rightSlices.length > leftSlices.length) rebalance(rightSlices, leftSlices);
+          else rebalance(leftSlices, rightSlices);
+          
+          /* Sort each side by vertical position */
+          rightSlices.sort((a,b) => a.yRaw - b.yRaw);
+          leftSlices.sort((a,b) => a.yRaw - b.yRaw);
           
           function resolveStack(list) {
             if (list.length === 0) return;
             list[0].y = list[0].yRaw;
-            /* Forward pass: push down to avoid overlap with previous */
+            /* Forward: push down to avoid overlap */
             for (let i = 1; i < list.length; i++) {
               list[i].y = Math.max(list[i].yRaw, list[i-1].y + labelGap);
             }
-            /* Backward pass: if last is below canvas bound, pull up */
-            const cy = list[0].cy;
-            const maxY = cy + list[0].radius + 50;
-            const minY = cy - list[0].radius - 50;
-            for (let i = list.length - 1; i > 0; i--) {
-              if (list[i].y > maxY) {
-                list[i].y = maxY - (list.length - 1 - i) * labelGap;
-              }
+            /* If stack exceeds canvas bottom, shift everyone up */
+            const maxAllowed = canvasH - 14;
+            const lastY = list[list.length - 1].y;
+            if (lastY > maxAllowed) {
+              const shift = lastY - maxAllowed;
+              list.forEach(s => { s.y -= shift; });
             }
-            /* Forward pass again to fix any new overlaps */
-            for (let i = 1; i < list.length; i++) {
-              list[i].y = Math.max(list[i].y, list[i-1].y + labelGap);
+            /* If stack now goes above top, accept the clip (rare) */
+            const minAllowed = 14;
+            const firstY = list[0].y;
+            if (firstY < minAllowed) {
+              const shift = minAllowed - firstY;
+              list.forEach(s => { s.y += shift; });
+              /* Re-resolve any overlaps */
+              for (let i = 1; i < list.length; i++) {
+                list[i].y = Math.max(list[i].y, list[i-1].y + labelGap);
+              }
             }
           }
           resolveStack(rightSlices);
           resolveStack(leftSlices);
           
+          /* Calculate max label x-position per side so text stays inside canvas */
+          /* Estimate longest label width */
           ctx.save();
+          ctx.font = "600 11px 'DM Sans', sans-serif";
+          function labelWidth(s) {
+            let nm = s.label;
+            if (nm.length > 12) {
+              const sp = nm.indexOf(' ');
+              nm = (sp > 0 && sp <= 12) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 11) + '\u2026';
+            }
+            return Math.max(ctx.measureText(nm).width, ctx.measureText('99.9%').width);
+          }
+          
           ctx.lineWidth = 1;
           ctx.textBaseline = 'middle';
           
-          slices.forEach(s => {
+          [...rightSlices, ...leftSlices].forEach(s => {
             const yAdj = s.y;
-            const labelGapFromEdge = 24;
-            const xEnd = s.cx + (s.isRight ? 1 : -1) * (s.radius + labelGapFromEdge);
+            const labelGapFromEdge = 22;
+            let xEnd = s.cx + (s.isRight ? 1 : -1) * (s.radius + labelGapFromEdge);
             
-            /* Leader line: slice edge → bend point → horizontal to label */
+            /* Truncate name first to compute width */
+            let nm = s.label;
+            if (nm.length > 12) {
+              const sp = nm.indexOf(' ');
+              nm = (sp > 0 && sp <= 12) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 11) + '\u2026';
+            }
+            const lblW = labelWidth(s);
+            
+            /* Clamp xEnd so the full label fits inside canvas */
+            const pad = 6;
+            if (s.isRight) {
+              const maxX = canvasW - lblW - pad;
+              if (xEnd > maxX) xEnd = maxX;
+            } else {
+              const minX = lblW + pad;
+              if (xEnd < minX) xEnd = minX;
+            }
+            
+            /* Leader line: slice edge → bend → label */
             const xStart = s.cx + Math.cos(s.angle) * s.radius;
             const yStart = s.cy + Math.sin(s.angle) * s.radius;
             const xMid = s.cx + Math.cos(s.angle) * (s.radius + 8);
             const yMid = s.cy + Math.sin(s.angle) * (s.radius + 8);
             
-            /* Slice-colored leader line, slightly translucent */
             ctx.strokeStyle = s.color;
             ctx.globalAlpha = 0.65;
             ctx.beginPath();
@@ -2895,24 +2958,16 @@ function _drawSummary() {
             ctx.lineTo(xEnd, yAdj);
             ctx.stroke();
             
-            /* Label text: two lines (Name on top, percent below) */
+            /* Labels */
             ctx.globalAlpha = 1;
             ctx.fillStyle = labelColor;
             const pct = (s.ratio * 100).toFixed(1) + '%';
-            /* Truncate long names */
-            let nm = s.label;
-            if (nm.length > 12) {
-              const sp = nm.indexOf(' ');
-              nm = (sp > 0 && sp <= 12) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 11) + '\u2026';
-            }
             
             ctx.textAlign = s.isRight ? 'left' : 'right';
             const xText = xEnd + (s.isRight ? 4 : -4);
             
-            /* Name on top */
             ctx.font = "600 11px 'DM Sans', sans-serif";
             ctx.fillText(nm, xText, yAdj - 7);
-            /* Percent below */
             ctx.font = "500 10px 'DM Sans', sans-serif";
             ctx.fillStyle = isDark ? '#a0a0a8' : '#666';
             ctx.fillText(pct, xText, yAdj + 7);
@@ -8456,6 +8511,8 @@ function renderPaymentDonut(pool) {
         const dataset = chart.data.datasets[0];
         const labels = chart.data.labels;
         const sliceColors = dataset.backgroundColor || [];
+        const canvasW = chart.width;
+        const canvasH = chart.height;
         
         const slices = [];
         meta.data.forEach((arc, i) => {
@@ -8473,9 +8530,29 @@ function renderPaymentDonut(pool) {
         });
         if (slices.length === 0) return;
         
-        const rightSlices = slices.filter(s => s.isRight).sort((a,b) => a.yRaw - b.yRaw);
-        const leftSlices  = slices.filter(s => !s.isRight).sort((a,b) => a.yRaw - b.yRaw);
+        let rightSlices = slices.filter(s => s.isRight);
+        let leftSlices  = slices.filter(s => !s.isRight);
         const labelGap = 26;
+        const radSlice = slices[0].radius;
+        const maxLabelsPerSide = Math.max(3, Math.floor((radSlice * 2 + 60) / labelGap));
+        
+        function rebalance(over, under) {
+          while (over.length > maxLabelsPerSide && over.length - under.length >= 2) {
+            const sorted = over.slice().sort((a, b) =>
+              Math.abs(Math.cos(b.angle)) - Math.abs(Math.cos(a.angle))
+            );
+            const moveMe = sorted[sorted.length - 1];
+            moveMe.isRight = !moveMe.isRight;
+            const idx = over.indexOf(moveMe);
+            over.splice(idx, 1);
+            under.push(moveMe);
+          }
+        }
+        if (rightSlices.length > leftSlices.length) rebalance(rightSlices, leftSlices);
+        else rebalance(leftSlices, rightSlices);
+        
+        rightSlices.sort((a,b) => a.yRaw - b.yRaw);
+        leftSlices.sort((a,b) => a.yRaw - b.yRaw);
         
         function resolveStack(list) {
           if (list.length === 0) return;
@@ -8483,27 +8560,56 @@ function renderPaymentDonut(pool) {
           for (let i = 1; i < list.length; i++) {
             list[i].y = Math.max(list[i].yRaw, list[i-1].y + labelGap);
           }
-          const cy = list[0].cy;
-          const maxY = cy + list[0].radius + 50;
-          for (let i = list.length - 1; i > 0; i--) {
-            if (list[i].y > maxY) {
-              list[i].y = maxY - (list.length - 1 - i) * labelGap;
-            }
+          const maxAllowed = canvasH - 14;
+          const lastY = list[list.length - 1].y;
+          if (lastY > maxAllowed) {
+            const shift = lastY - maxAllowed;
+            list.forEach(s => { s.y -= shift; });
           }
-          for (let i = 1; i < list.length; i++) {
-            list[i].y = Math.max(list[i].y, list[i-1].y + labelGap);
+          const minAllowed = 14;
+          if (list[0].y < minAllowed) {
+            const shift = minAllowed - list[0].y;
+            list.forEach(s => { s.y += shift; });
+            for (let i = 1; i < list.length; i++) {
+              list[i].y = Math.max(list[i].y, list[i-1].y + labelGap);
+            }
           }
         }
         resolveStack(rightSlices);
         resolveStack(leftSlices);
         
         ctx.save();
+        ctx.font = "600 11px 'DM Sans', sans-serif";
+        function labelWidth(s) {
+          let nm = s.label;
+          if (nm.length > 12) {
+            const sp = nm.indexOf(' ');
+            nm = (sp > 0 && sp <= 12) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 11) + '\u2026';
+          }
+          return Math.max(ctx.measureText(nm).width, ctx.measureText('99.9%').width);
+        }
+        
         ctx.lineWidth = 1;
         ctx.textBaseline = 'middle';
         
-        slices.forEach(s => {
+        [...rightSlices, ...leftSlices].forEach(s => {
           const yAdj = s.y;
-          const xEnd = s.cx + (s.isRight ? 1 : -1) * (s.radius + 24);
+          let xEnd = s.cx + (s.isRight ? 1 : -1) * (s.radius + 22);
+          
+          let nm = s.label;
+          if (nm.length > 12) {
+            const sp = nm.indexOf(' ');
+            nm = (sp > 0 && sp <= 12) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 11) + '\u2026';
+          }
+          const lblW = labelWidth(s);
+          const pad = 6;
+          if (s.isRight) {
+            const maxX = canvasW - lblW - pad;
+            if (xEnd > maxX) xEnd = maxX;
+          } else {
+            const minX = lblW + pad;
+            if (xEnd < minX) xEnd = minX;
+          }
           
           const xStart = s.cx + Math.cos(s.angle) * s.radius;
           const yStart = s.cy + Math.sin(s.angle) * s.radius;
@@ -8521,11 +8627,6 @@ function renderPaymentDonut(pool) {
           ctx.globalAlpha = 1;
           ctx.fillStyle = labelColor;
           const pct = (s.ratio * 100).toFixed(1) + '%';
-          let nm = s.label;
-          if (nm.length > 12) {
-            const sp = nm.indexOf(' ');
-            nm = (sp > 0 && sp <= 12) ? nm.slice(0, sp) + '\u2026' : nm.slice(0, 11) + '\u2026';
-          }
           
           ctx.textAlign = s.isRight ? 'left' : 'right';
           const xText = xEnd + (s.isRight ? 4 : -4);
